@@ -76,7 +76,10 @@ node src/test-send.js              # 检查登录状态
 node src/test-send.js search 张三   # 搜索联系人
 ```
 
-### 5. 接入 Claude Code
+### 5. 接入 AI 客户端
+
+<details>
+<summary><strong>Claude Code</strong></summary>
 
 在你的项目 `.mcp.json` 中添加：
 
@@ -93,10 +96,34 @@ node src/test-send.js search 张三   # 搜索联系人
 }
 ```
 
-然后在 Claude Code 中直接说：
-- "给张三发消息说明天下午开会"
-- "搜索一下飞书里有哪些群"
-- "检查一下飞书登录状态"
+然后直接说："给张三发消息说明天下午开会"
+
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong></summary>
+
+添加到 `~/Library/Application Support/Claude/claude_desktop_config.json`（macOS）：
+
+```json
+{
+  "mcpServers": {
+    "feishu-user-mcp": {
+      "command": "node",
+      "args": ["/你的绝对路径/feishu-user-mcp/src/index.js"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Cursor / VS Code / Windsurf</strong></summary>
+
+配置格式类似，具体路径参见 [English README](README.md#client-setup)。
+
+</details>
 
 ## Claude Code 技能
 

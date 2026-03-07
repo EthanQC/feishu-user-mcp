@@ -6,22 +6,22 @@
 
 **English** | [中文](README_CN.md)
 
-**Send Feishu messages as YOUR personal identity — not a bot.**
+**Send Feishu/Lark messages as YOUR personal identity — not a bot.**
 
-An MCP (Model Context Protocol) server that reverse-engineers Feishu's internal Protobuf protocol, enabling Claude Code and other AI tools to send messages, search contacts, and manage chats as the real you.
+An MCP server that reverse-engineers Feishu's internal Protobuf protocol, enabling Claude Code and other AI tools to send messages, search contacts, and manage chats as the real you.
 
 ## Why This Exists
 
 Feishu's official API has a hard limitation: **there is no `send_as_user` scope**. Even with `user_access_token` (OAuth), messages still show `sender_type: "app"` — they come from your app, not from you.
 
-This project bypasses that limitation entirely by using the same protocol that Feishu's web client uses internally.
+This project bypasses that limitation entirely by using the same internal protocol that Feishu's web client uses.
 
 ```
-Official API:  You → Bot App → Feishu (shows as bot)
-This project:  You → Cookie Auth → Feishu (shows as YOU)
+Official API:  You → Bot App → Feishu (messages show as bot)
+This project:  You → Cookie Auth → Feishu (messages show as YOU)
 ```
 
-## Tools
+## Tools (8 total)
 
 | Tool | Description |
 |------|-------------|
@@ -34,7 +34,7 @@ This project:  You → Cookie Auth → Feishu (shows as YOU)
 | `get_user_info` | Look up a user's display name |
 | `get_login_status` | Check if your session is still valid |
 
-## Quick Start
+## Installation
 
 ### 1. Clone & Install
 
@@ -48,19 +48,29 @@ npm install
 
 Login to [feishu.cn/messenger](https://www.feishu.cn/messenger/) in your browser, then extract cookies.
 
-> **Important**: You need HttpOnly cookies (like `session`), which `document.cookie` cannot access. Use one of these methods:
+> **Important**: You need HttpOnly cookies (like `session`), which `document.cookie` cannot access.
 
-**Option A: Browser DevTools (Manual)**
+<details>
+<summary><strong>Option A: Browser DevTools (Manual)</strong></summary>
+
 1. Open `F12` → `Application` → `Cookies` → `https://www.feishu.cn`
 2. Select all cookies, right-click → Copy
 3. Format as `name1=value1; name2=value2; ...` string
 
-**Option B: Playwright (Recommended)**
+</details>
+
+<details>
+<summary><strong>Option B: Playwright (Recommended — gets HttpOnly cookies automatically)</strong></summary>
+
+If you have [Playwright MCP](https://github.com/anthropics/mcp-playwright) configured:
+
 ```js
-// If you have Playwright MCP configured in Claude Code:
+// Run in Claude Code or Playwright script:
 const cookies = await context.cookies('https://www.feishu.cn');
 const cookieStr = cookies.map(c => c.name + '=' + c.value).join('; ');
 ```
+
+</details>
 
 ### 3. Configure
 
@@ -76,7 +86,10 @@ node src/test-send.js              # Check login status
 node src/test-send.js search 张三   # Search contacts
 ```
 
-### 5. Connect to Claude Code
+## Client Setup
+
+<details>
+<summary><strong>Claude Code</strong></summary>
 
 Add to your project's `.mcp.json`:
 
@@ -93,14 +106,89 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Then in Claude Code, you can say:
+Then you can say:
 - "给张三发消息说明天下午开会"
 - "搜索一下飞书里有哪些群"
 - "检查一下飞书登录状态"
 
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong></summary>
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "feishu-user-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Cursor</strong></summary>
+
+Add to `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "feishu-user-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>VS Code (Copilot)</strong></summary>
+
+Add to `.vscode/mcp.json` in your project:
+
+```json
+{
+  "servers": {
+    "feishu-user-mcp": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Windsurf</strong></summary>
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "feishu-user-mcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
+    }
+  }
+}
+```
+
+</details>
+
 ## Claude Code Skills
 
-This repo includes ready-to-use Claude Code skills in `.claude/commands/`:
+This repo includes ready-to-use [slash commands](https://docs.anthropic.com/en/docs/claude-code/tutorials#create-custom-slash-commands) in `.claude/commands/`:
 
 | Skill | Usage | Description |
 |-------|-------|-------------|
@@ -108,18 +196,19 @@ This repo includes ready-to-use Claude Code skills in `.claude/commands/`:
 | `/search` | `/search 技术` | Search contacts and groups |
 | `/status` | `/status` | Check login status |
 
+To use these skills, either clone this repo as your project or copy `.claude/commands/` into your own project.
+
 ## How It Works
 
 ```
 ┌──────────────┐     Cookie Auth     ┌──────────────────────────────────────┐
-│  Claude Code │ ───────────────────→ │  internal-api-lark-api.feishu.cn     │
-│  (MCP Client)│ ←───────────────── │  /im/gateway/ (Protobuf over HTTP)   │
+│  MCP Client  │ ───────────────────→ │  internal-api-lark-api.feishu.cn     │
+│  (Claude etc)│ ←───────────────── │  /im/gateway/ (Protobuf over HTTP)   │
 └──────────────┘     Protobuf        └──────────────────────────────────────┘
 ```
 
 **Protocol**: HTTP POST with `application/x-protobuf` content type to Feishu's internal gateway.
 
-**Commands** (Protobuf `cmd` field):
 | cmd | Operation | Proto Message |
 |-----|-----------|---------------|
 | 5 | Send message | `PutMessageRequest` |
@@ -129,25 +218,25 @@ This repo includes ready-to-use Claude Code skills in `.claude/commands/`:
 | 11021 | Search | `UniversalSearchRequest` |
 
 **Auth flow**:
-1. POST to `/accounts/csrf` → get `swp_csrf_token` from Set-Cookie
-2. GET `/accounts/web/user` with CSRF token → get user ID
-3. Use cookie + CSRF for all subsequent Protobuf requests
+1. POST `/accounts/csrf` → get `swp_csrf_token` from Set-Cookie
+2. GET `/accounts/web/user` with CSRF token → get user ID & name
+3. Use cookie + CSRF for all subsequent Protobuf gateway requests
 
 Based on protocol research from [cv-cat/LarkAgentX](https://github.com/cv-cat/LarkAgentX) (Python), completely rewritten in Node.js with MCP integration.
 
 ## Cookie Lifecycle
 
 - Feishu web sessions typically last **12-24 hours**
-- When your session expires, the MCP server will throw an auth error
+- When expired, the MCP server throws an auth error on init
 - Re-login at feishu.cn and update `LARK_COOKIE` in `.env`
-- Use `get_login_status` tool to check session health
+- Use `get_login_status` tool to check session health proactively
 
 ## Limitations
 
 - Cookie-based auth requires periodic manual refresh
-- Depends on Feishu's internal protocol — may break if Feishu changes their web client
+- Depends on Feishu's internal protocol — may break if Feishu updates their web client
 - Text messages only (no rich text, images, or cards yet)
-- No real-time message receiving (WebSocket listener not yet implemented)
+- No real-time message receiving (WebSocket not yet implemented)
 - May violate Feishu's Terms of Service — use at your own risk
 
 ## Project Structure
@@ -155,22 +244,22 @@ Based on protocol research from [cv-cat/LarkAgentX](https://github.com/cv-cat/La
 ```
 feishu-user-mcp/
 ├── src/
-│   ├── index.js        # MCP server entry point (8 tools)
-│   ├── client.js       # LarkUserClient — Protobuf gateway client
-│   ├── utils.js        # ID generators, cookie parser, MD5
+│   ├── index.js        # MCP server (8 tools)
+│   ├── client.js       # LarkUserClient — Protobuf gateway
+│   ├── utils.js        # ID generators, cookie parser
 │   └── test-send.js    # CLI test tool
 ├── proto/
-│   └── lark.proto      # Feishu Protobuf message definitions
+│   └── lark.proto      # Protobuf message definitions
 ├── .claude/
-│   └── commands/       # Claude Code skills (send, search, status)
-├── CLAUDE.md           # Claude Code project instructions
-├── .env.example        # Cookie configuration template
+│   └── commands/       # Claude Code slash commands
+├── CLAUDE.md           # AI project instructions
+├── .env.example        # Configuration template
 └── package.json
 ```
 
 ## Contributing
 
-Issues and PRs welcome. If Feishu updates their protocol, please open an issue with the error details.
+Issues and PRs welcome. If Feishu updates their protocol, please open an issue with the error details so we can fix it quickly.
 
 ## License
 
@@ -178,6 +267,6 @@ Issues and PRs welcome. If Feishu updates their protocol, please open an issue w
 
 ## Acknowledgments
 
-- [cv-cat/LarkAgentX](https://github.com/cv-cat/LarkAgentX) — Original Feishu protocol reverse-engineering (Python)
+- [cv-cat/LarkAgentX](https://github.com/cv-cat/LarkAgentX) — Original Feishu protocol reverse-engineering
 - [cv-cat/OpenFeiShuApis](https://github.com/cv-cat/OpenFeiShuApis) — Underlying API research
 - [Model Context Protocol](https://modelcontextprotocol.io) — The MCP standard

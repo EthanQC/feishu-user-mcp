@@ -1,0 +1,42 @@
+{
+  "name": "feishu-user-mcp",
+  "display_name": "Feishu User MCP",
+  "description": "Send Feishu/Lark messages as your personal identity (not a bot) using reverse-engineered Protobuf protocol",
+  "icon": "https://www.feishu.cn/favicon.ico",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EthanQC/feishu-user-mcp"
+  },
+  "license": "MIT",
+  "categories": ["communication", "messaging"],
+  "tags": ["feishu", "lark", "im", "messaging", "protobuf"],
+  "tools": [
+    { "name": "send_to_user", "description": "Search user by name and send message in one step" },
+    { "name": "send_to_group", "description": "Search group by name and send message in one step" },
+    { "name": "send_as_user", "description": "Send message to any chat by chat ID" },
+    { "name": "search_contacts", "description": "Search users, bots, and groups by keyword" },
+    { "name": "create_p2p_chat", "description": "Create or get a direct message chat" },
+    { "name": "get_chat_info", "description": "Get group chat details" },
+    { "name": "get_user_info", "description": "Look up user display name" },
+    { "name": "get_login_status", "description": "Check session validity" }
+  ],
+  "packages": {
+    "npm": {
+      "name": "feishu-user-mcp"
+    }
+  },
+  "installations": {
+    "claude-code": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["src/index.js"]
+    }
+  },
+  "environment_variables": [
+    {
+      "name": "LARK_COOKIE",
+      "description": "Feishu web login cookie string",
+      "required": true
+    }
+  ]
+}
