@@ -12,6 +12,7 @@ class LarkUserClient {
     this.cookieStr = cookieStr;
     this.csrfToken = null;
     this.userId = null;
+    this.userName = null;
     this.proto = null;
   }
 
@@ -19,7 +20,10 @@ class LarkUserClient {
     this.proto = await protobuf.load(path.join(__dirname, '..', 'proto', 'lark.proto'));
     await this._getCsrfToken();
     await this._getUserInfo();
-    console.error(`[feishu-user-mcp] Initialized as user: ${this.userId}`);
+    if (!this.userId) {
+      throw new Error('Failed to authenticate. Cookie may be expired — re-login at feishu.cn and update LARK_COOKIE.');
+    }
+    console.error(`[feishu-user-mcp] Initialized as user: ${this.userName || this.userId}`);
   }
 
   // --- Auth ---
@@ -31,9 +35,7 @@ class LarkUserClient {
         ...this._jsonHeaders(),
         'x-request-id': generateRequestId(),
       },
-      credentials: 'include',
     });
-    // Extract swp_csrf_token from Set-Cookie header
     const setCookie = res.headers.getSetCookie?.() || [];
     for (const c of setCookie) {
       const match = c.match(/swp_csrf_token=([^;]+)/);
@@ -45,9 +47,7 @@ class LarkUserClient {
       }
     }
     if (!this.csrfToken) {
-      // Try from response body
-      const body = await res.json().catch(() => ({}));
-      console.error('[feishu-user-mcp] CSRF response:', JSON.stringify(body).slice(0, 200));
+      console.error('[feishu-user-mcp] Warning: Could not obtain CSRF token');
     }
   }
 
@@ -59,11 +59,10 @@ class LarkUserClient {
         'x-request-id': generateRequestId(),
       },
     });
-    const body = await res.json();
+    const body = await res.json().catch(() => null);
     if (body?.data?.user?.id) {
       this.userId = String(body.data.user.id);
-    } else {
-      console.error('[feishu-user-mcp] Failed to get user info:', JSON.stringify(body).slice(0, 300));
+      this.userName = body.data.user.name || null;
     }
   }
 
@@ -109,8 +108,7 @@ class LarkUserClient {
 
   _encode(typeName, data) {
     const Type = this.proto.lookupType(typeName);
-    const msg = Type.create(data);
-    return Type.encode(msg).finish();
+    return Type.encode(Type.create(data)).finish();
   }
 
   _decode(typeName, buffer) {
@@ -118,19 +116,33 @@ class LarkUserClient {
     return Type.decode(buffer);
   }
 
-  // --- Send Message (as user!) ---
+  async _gateway(cmd, reqType, reqData, cmdVersion) {
+    const reqBuf = this._encode(reqType, reqData);
+    const packetBuf = this._encode('Packet', {
+      payloadType: 1,
+      cmd,
+      cid: generateRequestId(),
+      payload: reqBuf,
+    });
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: this._protoHeaders(cmd, cmdVersion),
+      body: packetBuf,
+    });
+    const resBuf = Buffer.from(await res.arrayBuffer());
+    return { packet: this._decode('Packet', resBuf), ok: res.ok };
+  }
+
+  // --- Send Message (cmd=5) ---
 
   async sendMessage(chatId, text) {
     const cid1 = generateCid();
     const cid2 = generateCid();
-
-    // Build TextProperty
     const textPropBuf = this._encode('TextProperty', { content: text });
 
-    // Build PutMessageRequest
-    const putMsgData = {
-      type: 4, // TEXT
-      chatId: chatId,
+    const { packet, ok } = await this._gateway(5, 'PutMessageRequest', {
+      type: 4,
+      chatId,
       cid: cid1,
       isNotified: true,
       version: 1,
@@ -140,155 +152,104 @@ class LarkUserClient {
           innerText: text,
           elements: {
             dictionary: {
-              [cid2]: {
-                tag: 1, // TEXT
-                property: textPropBuf,
-              },
+              [cid2]: { tag: 1, property: textPropBuf },
             },
           },
         },
       },
-    };
-    const putMsgBuf = this._encode('PutMessageRequest', putMsgData);
+    }, '5.7.0');
 
-    // Wrap in Packet
-    const packetBuf = this._encode('Packet', {
-      payloadType: 1, // PB2
-      cmd: 5,
-      cid: generateRequestId(),
-      payload: putMsgBuf,
-    });
-
-    const res = await fetch(GATEWAY_URL, {
-      method: 'POST',
-      headers: this._protoHeaders(5, '5.7.0'),
-      body: packetBuf,
-    });
-
-    const resBuf = Buffer.from(await res.arrayBuffer());
-    const resPacket = this._decode('Packet', resBuf);
-    // cmd=1 in response means message push-back (success), status field may be absent
     return {
-      success: res.ok && (resPacket.status === 0 || resPacket.status == null),
-      status: resPacket.status,
-      cmd: resPacket.cmd,
+      success: ok && (packet.status === 0 || packet.status == null),
+      status: packet.status,
     };
   }
 
-  // --- Search Contacts ---
+  // --- Search (cmd=11021) ---
 
   async search(query) {
-    const sessionId = generateCid();
-
-    const searchReq = {
+    const { packet } = await this._gateway(11021, 'UniversalSearchRequest', {
       header: {
-        searchSession: sessionId,
+        searchSession: generateCid(),
         sessionSeqId: 1,
-        query: query,
+        query,
         locale: 'zh_CN',
         searchContext: {
           tagName: 'SMART_SEARCH',
           entityItems: [
-            { type: 1 }, // USER
-            { type: 2 }, // BOT
-            { type: 3, filter: { groupChatFilter: {} } }, // GROUP_CHAT
+            { type: 1 },
+            { type: 2 },
+            { type: 3, filter: { groupChatFilter: {} } },
           ],
           commonFilter: { includeOuterTenant: true },
           sourceKey: 'messenger',
         },
       },
-    };
-
-    const searchBuf = this._encode('UniversalSearchRequest', searchReq);
-    const packetBuf = this._encode('Packet', {
-      payloadType: 1,
-      cmd: 11021,
-      cid: generateRequestId(),
-      payload: searchBuf,
     });
 
-    const res = await fetch(GATEWAY_URL, {
-      method: 'POST',
-      headers: this._protoHeaders(11021),
-      body: packetBuf,
-    });
-
-    const resBuf = Buffer.from(await res.arrayBuffer());
-    const resPacket = this._decode('Packet', resBuf);
-
-    if (resPacket.payload) {
-      const searchRes = this._decode('UniversalSearchResponse', resPacket.payload);
-      return (searchRes.results || []).map((r) => ({
-        id: r.id,
-        type: r.type === 1 ? 'user' : r.type === 3 ? 'group' : 'other',
-        title: r.titleHighlighted?.replace(/<[^>]+>/g, '') || '',
-      }));
-    }
-    return [];
+    if (!packet.payload) return [];
+    const searchRes = this._decode('UniversalSearchResponse', packet.payload);
+    return (searchRes.results || []).map((r) => ({
+      id: r.id,
+      type: r.type === 1 ? 'user' : r.type === 3 ? 'group' : 'bot',
+      title: r.titleHighlighted?.replace(/<[^>]+>/g, '') || '',
+      summary: r.summaryHighlighted?.replace(/<[^>]+>/g, '') || '',
+    }));
   }
 
-  // --- Create Chat (for P2P) ---
+  // --- Create P2P Chat (cmd=13) ---
 
   async createChat(userId) {
-    const chatReq = { type: 1, chatterIds: [userId] };
-    const chatBuf = this._encode('PutChatRequest', chatReq);
-    const packetBuf = this._encode('Packet', {
-      payloadType: 1,
-      cmd: 13,
-      cid: generateRequestId(),
-      payload: chatBuf,
+    const { packet } = await this._gateway(13, 'PutChatRequest', {
+      type: 1,
+      chatterIds: [userId],
     });
 
-    const res = await fetch(GATEWAY_URL, {
-      method: 'POST',
-      headers: this._protoHeaders(13),
-      body: packetBuf,
-    });
-
-    const resBuf = Buffer.from(await res.arrayBuffer());
-    const resPacket = this._decode('Packet', resBuf);
-
-    if (resPacket.payload) {
-      const chatRes = this._decode('PutChatResponse', resPacket.payload);
-      return chatRes.chat?.id || null;
-    }
-    return null;
+    if (!packet.payload) return null;
+    const chatRes = this._decode('PutChatResponse', packet.payload);
+    return chatRes.chat?.id || null;
   }
 
-  // --- Get User Name ---
+  // --- Get Group Info (cmd=64) ---
+
+  async getGroupInfo(chatId) {
+    const { packet } = await this._gateway(64, 'GetGroupInfoRequest', { chatId });
+
+    if (!packet.payload) return null;
+    const res = this._decode('GetGroupInfoResponse', packet.payload);
+    const chat = res.chat;
+    if (!chat) return null;
+    return {
+      id: chat.id,
+      name: chat.name || '',
+      description: chat.description || '',
+      type: chat.type === 1 ? 'p2p' : chat.type === 2 ? 'group' : chat.type === 3 ? 'topic_group' : 'unknown',
+      memberCount: chat.memberCount || chat.userCount || 0,
+      ownerId: chat.ownerId || '',
+      isPublic: !!chat.isPublic,
+      isDissolved: !!chat.isDissolved,
+      createTime: chat.createTime ? Number(chat.createTime) : null,
+    };
+  }
+
+  // --- Get User Name (cmd=5023) ---
 
   async getUserName(userId, chatId) {
-    const reqBuf = this._encode('GetUserInfoRequest', {
+    const { packet } = await this._gateway(5023, 'GetUserInfoRequest', {
       userId: parseInt(userId),
-      chatId: parseInt(chatId),
+      chatId: chatId ? parseInt(chatId) : 0,
       userType: 1,
     });
-    const packetBuf = this._encode('Packet', {
-      payloadType: 1,
-      cmd: 5023,
-      cid: generateRequestId(),
-      payload: reqBuf,
-    });
 
-    const res = await fetch(GATEWAY_URL, {
-      method: 'POST',
-      headers: this._protoHeaders(5023),
-      body: packetBuf,
-    });
-
-    const resBuf = Buffer.from(await res.arrayBuffer());
-    const resPacket = this._decode('Packet', resBuf);
-
-    if (resPacket.payload) {
-      const userInfo = this._decode('UserInfo', resPacket.payload);
-      const detail = userInfo?.userInfoDetail?.detail;
-      if (detail?.locales) {
-        const zhEntry = detail.locales.find((l) => l.keyString === 'zh_cn');
-        if (zhEntry) return zhEntry.translation;
-      }
-      if (detail?.nickname) {
-        return Buffer.isBuffer(detail.nickname) ? detail.nickname.toString('utf-8') : String(detail.nickname);
-      }
+    if (!packet.payload) return null;
+    const userInfo = this._decode('UserInfo', packet.payload);
+    const detail = userInfo?.userInfoDetail?.detail;
+    if (detail?.locales) {
+      const zhEntry = detail.locales.find((l) => l.keyString === 'zh_cn');
+      if (zhEntry) return zhEntry.translation;
+    }
+    if (detail?.nickname) {
+      return Buffer.isBuffer(detail.nickname) ? detail.nickname.toString('utf-8') : String(detail.nickname);
     }
     return null;
   }

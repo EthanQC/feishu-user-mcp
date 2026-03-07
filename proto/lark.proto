@@ -1,6 +1,13 @@
 syntax = "proto3";
 
-// Outer WebSocket frame
+// ============================================================
+// Feishu/Lark Internal Protobuf Protocol
+// Reverse-engineered from Feishu Web Client
+// Reference: https://github.com/cv-cat/LarkAgentX
+// ============================================================
+
+// --- Transport Layer ---
+
 message Frame {
   optional uint64 seqid = 1;
   optional uint64 logid = 2;
@@ -12,7 +19,6 @@ message Frame {
   optional bytes payload = 8;
 }
 
-// Inner packet (inside Frame.payload or HTTP response)
 message Packet {
   optional string sid = 1;
   optional PayloadType payloadType = 2;
@@ -33,51 +39,7 @@ message ExtendedEntry {
   optional string value = 2;
 }
 
-// === IM Messages ===
-
-message PutMessageRequest {
-  optional Type type = 1;
-  optional Content content = 2;
-  optional string chatId = 3;
-  optional string rootId = 4;
-  optional string parentId = 5;
-  optional string cid = 6;
-  optional bool isNotified = 7;
-  optional bool sendToChat = 8;
-  optional int32 version = 9;
-}
-
-message PushMessagesRequest {
-  map<string, MessageEntity> messages = 1;
-  map<string, bool> participatedMessageIds = 3;
-  map<string, bool> forcePush = 8;
-  map<string, bool> messagesAtMe = 9;
-}
-
-message MessageEntity {
-  optional string id = 1;
-  optional Type type = 2;
-  optional string fromId = 3;
-  optional int64 createTime = 4;
-  optional bytes content = 5;
-  optional MessageStatus status = 6;
-  optional FromType fromType = 7;
-  optional string rootId = 8;
-  optional string parentId = 9;
-  optional string chatId = 10;
-  optional int64 lastModifyTime = 11;
-  optional string cid = 12;
-  optional int32 position = 13;
-  optional int64 updateTime = 14;
-  optional ChatType chatType = 46;
-
-  enum MessageStatus {
-    UNKNOWN_STATUS = 0;
-    NORMAL = 1;
-    DELETED = 2;
-    MODIFIED = 3;
-  }
-}
+// --- Message Types ---
 
 enum Type {
   UNKNOWN = 0;
@@ -105,13 +67,68 @@ enum ChatType {
   TOPIC_GROUP = 3;
 }
 
-// === Content ===
+// --- Send Message (cmd=5) ---
+
+message PutMessageRequest {
+  optional Type type = 1;
+  optional Content content = 2;
+  optional string chatId = 3;
+  optional string rootId = 4;
+  optional string parentId = 5;
+  optional string cid = 6;
+  optional bool isNotified = 7;
+  optional bool sendToChat = 8;
+  optional int32 version = 9;
+}
+
+// --- Receive Messages (WebSocket push) ---
+
+message PushMessagesRequest {
+  map<string, MessageEntity> messages = 1;
+  map<string, bool> participatedMessageIds = 3;
+  map<string, bool> forcePush = 8;
+  map<string, bool> messagesAtMe = 9;
+}
+
+message MessageEntity {
+  optional string id = 1;
+  optional Type type = 2;
+  optional string fromId = 3;
+  optional int64 createTime = 4;
+  optional bytes content = 5;
+  optional MessageStatus status = 6;
+  optional FromType fromType = 7;
+  optional string rootId = 8;
+  optional string parentId = 9;
+  optional string chatId = 10;
+  optional int64 lastModifyTime = 11;
+  optional string cid = 12;
+  optional int32 position = 13;
+  optional int64 updateTime = 14;
+  optional bool isNotified = 15;
+  optional string threadId = 20;
+  optional ChatType chatType = 46;
+
+  enum MessageStatus {
+    UNKNOWN_STATUS = 0;
+    NORMAL = 1;
+    DELETED = 2;
+    MODIFIED = 3;
+  }
+}
+
+// --- Content ---
 
 message Content {
   optional string text = 1;
   optional string imageKey = 2;
   optional string title = 3;
+  optional string fileKey = 6;
+  optional string audioKey = 7;
+  optional string fileName = 11;
   optional RichText richText = 14;
+  optional string stickerSetId = 24;
+  optional string stickerId = 25;
 }
 
 message TextContent {
@@ -150,8 +167,9 @@ message TextProperty {
   optional string content = 1;
 }
 
-// === Chat ===
+// --- Chat Operations ---
 
+// Create P2P chat (cmd=13)
 message PutChatRequest {
   optional Type type = 1;
   repeated string userIds = 2;
@@ -162,19 +180,50 @@ message PutChatResponse {
   optional Chat chat = 1;
 }
 
+// Get group info (cmd=64)
+message GetGroupInfoRequest {
+  optional string chatId = 1;
+}
+
+message GetGroupInfoResponse {
+  optional Chat chat = 1;
+}
+
 message Chat {
   optional string id = 1;
   optional ChatTypeEnum type = 2;
+  optional string lastMessageId = 3;
   optional string name = 4;
+  optional string ownerId = 6;
+  optional int32 newMessageCount = 7;
+  optional int64 updateTime = 9;
+  optional string description = 11;
+  optional int32 memberCount = 12;
+  optional bool isPublic = 14;
+  optional int32 lastMessagePosition = 15;
+  optional int32 userCount = 16;
+  optional int64 createTime = 18;
+  optional string tenantId = 25;
+  optional bool isDissolved = 30;
+  optional bool isCrossTenant = 41;
+  optional Announcement announcement = 24;
 
   enum ChatTypeEnum {
     UNKNOWN_CHAT = 0;
     P2P_CHAT = 1;
     GROUP_CHAT = 2;
+    TOPIC_GROUP_CHAT = 3;
+  }
+
+  message Announcement {
+    optional string content = 1;
+    optional int64 updateTime = 2;
+    optional string lastEditorId = 3;
+    optional string docUrl = 4;
   }
 }
 
-// === Search ===
+// --- Search (cmd=11021) ---
 
 message UniversalSearchRequest {
   optional SearchCommonRequestHeader header = 1;
@@ -239,16 +288,12 @@ message SearchResult {
   optional string avatarKey = 6;
 }
 
-// === User Info ===
+// --- User Info (cmd=5023) ---
 
 message GetUserInfoRequest {
   optional int64 chatId = 1;
   optional int64 userId = 3;
   optional int32 userType = 4;
-}
-
-message GetGroupInfoRequest {
-  optional string chatId = 1;
 }
 
 message UserInfo {

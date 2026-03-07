@@ -1,18 +1,39 @@
 {
   "name": "feishu-user-mcp",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Feishu MCP Server using reverse-engineered protocol for user-identity messaging",
+  "version": "0.2.0",
+  "description": "Feishu/Lark MCP Server — send messages as YOUR identity, not a bot. Reverse-engineered Protobuf protocol.",
   "main": "src/index.js",
+  "bin": {
+    "feishu-user-mcp": "src/index.js"
+  },
   "scripts": {
     "start": "node src/index.js",
     "test-send": "node src/test-send.js"
   },
+  "keywords": [
+    "feishu",
+    "lark",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "claude-code",
+    "im",
+    "messaging",
+    "protobuf",
+    "reverse-engineering"
+  ],
+  "author": "EthanQC",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EthanQC/feishu-user-mcp.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "protobufjs": "^7.4.0",
-    "ws": "^8.18.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "protobufjs": "^7.4.0"
   }
 }
