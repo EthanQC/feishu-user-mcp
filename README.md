@@ -4,6 +4,8 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green.svg)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
 
+**English** | [中文](README_CN.md)
+
 **Send Feishu messages as YOUR personal identity — not a bot.**
 
 An MCP (Model Context Protocol) server that reverse-engineers Feishu's internal Protobuf protocol, enabling Claude Code and other AI tools to send messages, search contacts, and manage chats as the real you.
