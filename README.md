@@ -6,19 +6,19 @@
 [![Tools](https://img.shields.io/badge/Tools-33-orange.svg)](#tools-33-total)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**English** | [中文](README_CN.md)
-
-**All-in-one Feishu/Lark MCP Server — 33 tools, 8 skills, three auth layers for messaging, docs, tables, wiki, and drive.**
+**All-in-one Feishu/Lark MCP Server -- 33 tools, 8 skills, 3 auth layers for messaging, docs, tables, wiki, and drive.**
 
 The only MCP server that lets you send messages as your **personal identity** (not a bot), while also integrating the full official Feishu API for documents, spreadsheets, wikis, and more.
 
 ## Highlights
 
-- **Send as yourself** — Messages show your real name, not a bot. Supports text, rich text, images, files, stickers, and audio.
-- **Read everything** — Group chats via bot API, P2P (direct messages) via OAuth UAT.
-- **Full Feishu suite** — Docs, Bitable (spreadsheets), Wiki, Drive, Contacts — all in one plugin.
-- **Auto session management** — Cookie heartbeat every 4h, UAT auto-refresh with token rotation.
-- **Chat name resolution** — Pass a group name instead of `oc_xxx` ID; it resolves automatically.
+- **Send as yourself** -- Messages show your real name, not a bot. Supports text, rich text, images, files, stickers, and audio.
+- **Read everything** -- Group chats via bot API, P2P (direct messages) via OAuth UAT.
+- **Full Feishu suite** -- Docs, Bitable (spreadsheets), Wiki, Drive, Contacts -- all in one plugin.
+- **3 auth layers** -- Cookie-based user identity, app credentials (Official API), and OAuth UAT (P2P reading). Each is independent; configure only what you need.
+- **8 slash commands** for Claude Code -- `/send`, `/reply`, `/search`, `/digest`, `/doc`, `/table`, `/wiki`, `/status`
+- **Auto session management** -- Cookie heartbeat every 4h, UAT auto-refresh with token rotation.
+- **Chat name resolution** -- Pass a group name instead of `oc_xxx` ID; it resolves automatically.
 
 ## Why This Exists
 
@@ -27,21 +27,266 @@ Feishu's official API has a hard limitation: **there is no `send_as_user` scope*
 This project combines three auth layers into one plugin:
 
 ```
-User Identity (cookie):     You → Protobuf → Feishu (messages appear as YOU)
-Official API  (app token):  You → REST API → Feishu (docs, tables, wiki, drive)
-User OAuth    (UAT):        You → REST API → Feishu (read P2P chats, list all chats)
+User Identity (cookie):     You -> Protobuf -> Feishu (messages appear as YOU)
+Official API  (app token):  You -> REST API -> Feishu (docs, tables, wiki, drive)
+User OAuth    (UAT):        You -> REST API -> Feishu (read P2P chats, list all chats)
 ```
 
 **One plugin. Everything Feishu. No other MCP needed.**
 
+## Quick Start
+
+### Option 1: npx (recommended)
+
+```bash
+npx feishu-user-mcp
+```
+
+No installation needed. The package runs directly via npx.
+
+### Option 2: Clone and run locally
+
+```bash
+git clone https://github.com/EthanQC/feishu-user-mcp.git
+cd feishu-user-mcp
+npm install
+npm start
+```
+
+## Create Your Feishu App
+
+To use the Official API tools (docs, tables, wiki, drive, bot messaging), you need to create a Feishu app:
+
+### Step 1: Create the App
+
+1. Go to [Feishu Open Platform](https://open.feishu.cn/app) and log in
+2. Click **Create Custom App** (创建自建应用) -- you must choose **Custom App** (自建应用), NOT marketplace/third-party types
+3. Fill in the app name and description, then create it
+
+### Step 2: Enable Bot Capability
+
+1. In your app settings, go to **Add Capabilities** (添加应用能力)
+2. Enable **Bot** (机器人)
+
+### Step 3: Add Permissions (Scopes)
+
+Go to **Permissions & Scopes** (权限管理) and add the following scopes:
+
+| Scope | Purpose |
+|-------|---------|
+| `im:message` | Send messages as bot |
+| `im:message:readonly` | Read message history |
+| `im:chat:readonly` | List and read chats |
+| `docx:document` | Read and create documents |
+| `docx:document:readonly` | Read documents |
+| `bitable:record` | Read and write Bitable records |
+| `wiki:wiki:readonly` | Read wiki spaces and nodes |
+| `drive:drive:readonly` | List Drive files and folders |
+| `contact:user.id:readonly` | Look up users by email/mobile |
+
+> Add more scopes as needed depending on which tools you use.
+
+### Step 4: Get App Credentials
+
+1. Go to **Credentials & Basic Info** (凭证与基础信息)
+2. Copy the **App ID** (`cli_xxxxxxxxxxxx`) and **App Secret**
+3. Set them as `LARK_APP_ID` and `LARK_APP_SECRET` in your environment
+
+### Step 5: Publish and Approve
+
+1. **Create a version** and submit it for review (创建版本)
+2. Have your organization admin approve the app (管理员审核)
+3. After approval, the app is live
+
+### Step 6: Add Bot to Group Chats
+
+Add your bot to the group chats where you want it to read messages. The bot can only access chats it has been added to.
+
+## Environment Variables
+
+| Variable | Required For | Description |
+|----------|-------------|-------------|
+| `LARK_COOKIE` | User identity tools | Feishu web session cookie string. Needed for `send_to_user`, `send_to_group`, `search_contacts`, etc. |
+| `LARK_APP_ID` | Official API tools | App ID from Feishu Open Platform. Needed for `read_messages`, docs, tables, wiki, drive. |
+| `LARK_APP_SECRET` | Official API tools | App Secret from Feishu Open Platform. Used together with `LARK_APP_ID`. |
+| `LARK_USER_ACCESS_TOKEN` | P2P chat reading | OAuth user token. Needed for `read_p2p_messages` and `list_user_chats`. Obtained via `node src/oauth.js`. |
+
+Each auth layer is independent. You can configure:
+- **Cookie only** -- for sending messages as yourself
+- **App credentials only** -- for reading docs, tables, wiki, group chats
+- **All three** -- for the full feature set
+
+## How to Get Your Cookie
+
+1. Open [feishu.cn/messenger](https://www.feishu.cn/messenger/) in your browser and log in
+2. Open DevTools (`F12` or `Cmd+Option+I`)
+3. Go to **Application** (or **Storage**) > **Cookies** > `https://www.feishu.cn`
+4. You need all cookies, including HttpOnly ones like `session`. Select all, right-click, copy.
+5. Format as a single string: `name1=value1; name2=value2; ...`
+6. Set it as `LARK_COOKIE` in your environment
+
+> **Tip**: If you have [Playwright MCP](https://github.com/anthropics/mcp-playwright) configured, you can extract HttpOnly cookies automatically:
+> ```js
+> const cookies = await context.cookies('https://www.feishu.cn');
+> const cookieStr = cookies.map(c => c.name + '=' + c.value).join('; ');
+> ```
+
+> The server automatically refreshes the session via heartbeat every 4 hours. The `sl_session` cookie has a 12-hour max-age.
+
+## How to Set Up P2P Chat Reading (OAuth)
+
+To read direct message history with `read_p2p_messages` and `list_user_chats`:
+
+1. Your Feishu app must be a **Custom App** (自建应用)
+2. Add scopes: `im:message`, `im:message:readonly`, `im:chat:readonly`
+3. In your app settings, add the OAuth redirect URI: `http://127.0.0.1:9997/callback`
+4. Run the authorization flow:
+
+```bash
+node src/oauth.js
+```
+
+A browser window will open for OAuth consent. The token is saved to `.env` automatically and auto-refreshes at runtime.
+
+## MCP Client Configuration
+
+### Claude Code
+
+Add to your project's `.mcp.json` (or `~/.claude/.mcp.json` for global):
+
+**Using npx:**
+
+```json
+{
+  "mcpServers": {
+    "feishu": {
+      "command": "npx",
+      "args": ["-y", "feishu-user-mcp"],
+      "env": {
+        "LARK_COOKIE": "your-cookie-string",
+        "LARK_APP_ID": "cli_xxxxxxxxxxxx",
+        "LARK_APP_SECRET": "your-app-secret"
+      }
+    }
+  }
+}
+```
+
+**Using a local clone:**
+
+```json
+{
+  "mcpServers": {
+    "feishu": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"],
+      "env": {
+        "LARK_COOKIE": "your-cookie-string",
+        "LARK_APP_ID": "cli_xxxxxxxxxxxx",
+        "LARK_APP_SECRET": "your-app-secret"
+      }
+    }
+  }
+}
+```
+
+Then just say things like:
+- "Send a message to Alice saying the meeting is at 3pm"
+- "What did the engineering group chat about today?"
+- "Search for docs about MCP"
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "feishu": {
+      "command": "npx",
+      "args": ["-y", "feishu-user-mcp"],
+      "env": {
+        "LARK_COOKIE": "your-cookie-string",
+        "LARK_APP_ID": "cli_xxxxxxxxxxxx",
+        "LARK_APP_SECRET": "your-app-secret"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `.cursor/mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "feishu": {
+      "command": "npx",
+      "args": ["-y", "feishu-user-mcp"],
+      "env": {
+        "LARK_COOKIE": "your-cookie-string",
+        "LARK_APP_ID": "cli_xxxxxxxxxxxx",
+        "LARK_APP_SECRET": "your-app-secret"
+      }
+    }
+  }
+}
+```
+
+### VS Code (Copilot)
+
+Add to `.vscode/mcp.json` in your project:
+
+```json
+{
+  "servers": {
+    "feishu": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "feishu-user-mcp"],
+      "env": {
+        "LARK_COOKIE": "your-cookie-string",
+        "LARK_APP_ID": "cli_xxxxxxxxxxxx",
+        "LARK_APP_SECRET": "your-app-secret"
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "feishu": {
+      "command": "npx",
+      "args": ["-y", "feishu-user-mcp"],
+      "env": {
+        "LARK_COOKIE": "your-cookie-string",
+        "LARK_APP_ID": "cli_xxxxxxxxxxxx",
+        "LARK_APP_SECRET": "your-app-secret"
+      }
+    }
+  }
+}
+```
+
 ## Tools (33 total)
 
-### User Identity — Messaging (reverse-engineered, cookie-based)
+### User Identity -- Messaging (cookie auth, Protobuf)
+
+Send messages as yourself, not as a bot.
 
 | Tool | Description |
 |------|-------------|
-| `send_to_user` | Search user by name + send text — one step |
-| `send_to_group` | Search group by name + send text — one step |
+| `send_to_user` | Search user by name + send text -- one step |
+| `send_to_group` | Search group by name + send text -- one step |
 | `send_as_user` | Send text to any chat by ID, supports reply threading (`root_id` / `parent_id`) |
 | `send_image_as_user` | Send image (requires `image_key` from upload) |
 | `send_file_as_user` | Send file (requires `file_key` from upload) |
@@ -49,7 +294,7 @@ User OAuth    (UAT):        You → REST API → Feishu (read P2P chats, list al
 | `send_sticker_as_user` | Send sticker/emoji |
 | `send_audio_as_user` | Send audio message |
 
-### User Identity — Contacts & Info
+### User Identity -- Contacts & Info (cookie auth)
 
 | Tool | Description |
 |------|-------------|
@@ -59,14 +304,14 @@ User OAuth    (UAT):        You → REST API → Feishu (read P2P chats, list al
 | `get_user_info` | User display name lookup by user ID |
 | `get_login_status` | Check cookie, app credentials, and UAT status |
 
-### User OAuth UAT — P2P Chat Reading
+### User OAuth UAT -- P2P Chat Reading
 
 | Tool | Description |
 |------|-------------|
 | `read_p2p_messages` | Read P2P (direct message) history. Works for chats the bot cannot access. |
 | `list_user_chats` | List all chats the user is in, including P2P. |
 
-### Official API — IM (Bot Identity)
+### Official API -- IM (Bot Identity)
 
 | Tool | Description |
 |------|-------------|
@@ -75,7 +320,7 @@ User OAuth    (UAT):        You → REST API → Feishu (read P2P chats, list al
 | `reply_message` | Reply to a specific message by `message_id` (as bot) |
 | `forward_message` | Forward a message to another chat |
 
-### Official API — Documents
+### Official API -- Documents
 
 | Tool | Description |
 |------|-------------|
@@ -83,7 +328,7 @@ User OAuth    (UAT):        You → REST API → Feishu (read P2P chats, list al
 | `read_doc` | Read raw text content of a document |
 | `create_doc` | Create a new document |
 
-### Official API — Bitable (Spreadsheets)
+### Official API -- Bitable (Spreadsheets)
 
 | Tool | Description |
 |------|-------------|
@@ -93,7 +338,7 @@ User OAuth    (UAT):        You → REST API → Feishu (read P2P chats, list al
 | `create_bitable_record` | Create a new record (row) |
 | `update_bitable_record` | Update an existing record |
 
-### Official API — Wiki
+### Official API -- Wiki
 
 | Tool | Description |
 |------|-------------|
@@ -101,251 +346,52 @@ User OAuth    (UAT):        You → REST API → Feishu (read P2P chats, list al
 | `search_wiki` | Search wiki/docs by keyword |
 | `list_wiki_nodes` | Browse wiki node tree |
 
-### Official API — Drive
+### Official API -- Drive
 
 | Tool | Description |
 |------|-------------|
 | `list_files` | List files in a folder |
 | `create_folder` | Create a new folder |
 
-### Official API — Contacts
+### Official API -- Contacts
 
 | Tool | Description |
 |------|-------------|
 | `find_user` | Find user by email or mobile number |
 
-## Quick Start
-
-### 1. Clone & Install
-
-```bash
-git clone https://github.com/EthanQC/feishu-user-mcp.git
-cd feishu-user-mcp
-npm install
-```
-
-### 2. Get Your Cookie
-
-Login to [feishu.cn/messenger](https://www.feishu.cn/messenger/) in your browser, then extract cookies.
-
-> **Important**: You need HttpOnly cookies (like `session`), which `document.cookie` cannot access.
-
-<details>
-<summary><strong>Option A: Browser DevTools (Manual)</strong></summary>
-
-1. Open `F12` → `Application` → `Cookies` → `https://www.feishu.cn`
-2. Select all cookies, right-click → Copy
-3. Format as `name1=value1; name2=value2; ...` string
-
-</details>
-
-<details>
-<summary><strong>Option B: Playwright (Recommended — gets HttpOnly cookies automatically)</strong></summary>
-
-If you have [Playwright MCP](https://github.com/anthropics/mcp-playwright) configured:
-
-```js
-const cookies = await context.cookies('https://www.feishu.cn');
-const cookieStr = cookies.map(c => c.name + '=' + c.value).join('; ');
-```
-
-</details>
-
-### 3. Configure
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your credentials:
-
-```env
-# Required — user identity messaging (reverse-engineered)
-LARK_COOKIE=paste_your_cookie_here
-
-# Required — official API (docs, tables, wiki, drive, bot IM)
-LARK_APP_ID=cli_xxxxx
-LARK_APP_SECRET=xxxxx
-
-# Optional — P2P chat reading (run: node src/oauth.js)
-LARK_USER_ACCESS_TOKEN=
-LARK_USER_REFRESH_TOKEN=
-```
-
-> Cookie is required for user-identity messaging. App credentials are required for official API tools. UAT is optional, only needed for P2P chat reading.
-
-### 4. (Optional) Enable P2P Chat Reading
-
-To read direct message history with `read_p2p_messages`:
-
-1. Your Feishu app must be a **自建应用** (custom app)
-2. Add scopes: `im:message`, `im:message:readonly`, `im:chat:readonly`
-3. Set OAuth redirect URI to `http://127.0.0.1:9997/callback`
-4. Run authorization:
-
-```bash
-node src/oauth.js
-```
-
-This opens a browser for OAuth consent, then saves the UAT to `.env` automatically. The token auto-refreshes when it expires.
-
-### 5. Verify
-
-```bash
-node src/test-send.js              # Check login status
-node src/test-send.js search 张三   # Search contacts
-node src/test-all.js               # Run full test suite
-```
-
-## Client Setup
-
-<details>
-<summary><strong>Claude Code</strong></summary>
-
-Add to your project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "feishu-user-mcp": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"],
-      "env": {}
-    }
-  }
-}
-```
-
-Then just say:
-- "给张三发消息说明天下午开会"
-- "帮我看一下技术群最近聊了什么"
-- "搜索飞书文档里关于 MCP 的内容"
-
-</details>
-
-<details>
-<summary><strong>Claude Desktop</strong></summary>
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
-
-```json
-{
-  "mcpServers": {
-    "feishu-user-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><strong>Cursor</strong></summary>
-
-Add to `.cursor/mcp.json` in your project:
-
-```json
-{
-  "mcpServers": {
-    "feishu-user-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><strong>VS Code (Copilot)</strong></summary>
-
-Add to `.vscode/mcp.json` in your project:
-
-```json
-{
-  "servers": {
-    "feishu-user-mcp": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><strong>Windsurf</strong></summary>
-
-Add to `~/.codeium/windsurf/mcp_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "feishu-user-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"]
-    }
-  }
-}
-```
-
-</details>
-
-## Claude Code Skills
+## Claude Code Slash Commands (8 skills)
 
 This repo includes 8 ready-to-use [slash commands](https://docs.anthropic.com/en/docs/claude-code/tutorials#create-custom-slash-commands) in `.claude/commands/`:
 
 | Skill | Usage | Description |
 |-------|-------|-------------|
-| `/send` | `/send 张三: 明天下午3点开会` | Send message as yourself |
-| `/reply` | `/reply 工坊群` | Read recent messages and reply |
-| `/digest` | `/digest 工坊群 7` | Summarize recent chat messages |
-| `/search` | `/search 技术` | Search contacts and groups |
+| `/send` | `/send Alice: meeting at 3pm` | Send message as yourself |
+| `/reply` | `/reply engineering-chat` | Read recent messages and reply |
+| `/digest` | `/digest engineering-chat 7` | Summarize recent chat messages |
+| `/search` | `/search engineering` | Search contacts and groups |
 | `/doc` | `/doc search MCP` | Search, read, or create documents |
 | `/table` | `/table query appXxx` | Query or create Bitable records |
-| `/wiki` | `/wiki search 协议` | Search and browse wiki |
+| `/wiki` | `/wiki search protocol` | Search and browse wiki |
 | `/status` | `/status` | Check login and auth status |
 
-To use, copy `.claude/commands/` into your project.
+To use these skills, copy `.claude/commands/` into your project.
 
 ## Architecture
 
 ```
-┌──────────────┐                    ┌──────────────────────────────────────┐
-│              │   Cookie + Proto   │  internal-api-lark-api.feishu.cn     │
-│  MCP Client  │ ──────────────────→│  /im/gateway/ (Protobuf over HTTP)   │
-│  (Claude,    │                    └──────────────────────────────────────┘
-│   Cursor,    │   App Token (REST) ┌──────────────────────────────────────┐
-│   VS Code)   │ ──────────────────→│  open.feishu.cn/open-apis/           │
-│              │                    │  (Official REST API)                 │
-│              │   User OAuth (REST)┌──────────────────────────────────────┐
-│              │ ──────────────────→│  open.feishu.cn/open-apis/           │
-└──────────────┘                    │  (UAT — P2P chat reading)            │
-                                    └──────────────────────────────────────┘
+                               Cookie + Proto   ┌──────────────────────────────────────┐
+                             ────────────────── >│  internal-api-lark-api.feishu.cn     │
+┌──────────────┐                                 │  /im/gateway/ (Protobuf over HTTP)   │
+│  MCP Client  │                                 └──────────────────────────────────────┘
+│  (Claude,    │  App Token (REST) ┌──────────────────────────────────────┐
+│   Cursor,    │ ────────────────->│  open.feishu.cn/open-apis/           │
+│   VS Code)   │                   │  (Official REST API)                 │
+│              │                   └──────────────────────────────────────┘
+│              │  User OAuth (REST)┌──────────────────────────────────────┐
+│              │ ────────────────->│  open.feishu.cn/open-apis/           │
+└──────────────┘                   │  (UAT -- P2P chat reading)           │
+                                   └──────────────────────────────────────┘
 ```
-
-### Protobuf Commands (User Identity Layer)
-
-| cmd | Operation | Proto Message |
-|-----|-----------|---------------|
-| 5 | Send message (text, image, file, post, sticker, audio) | `PutMessageRequest` |
-| 13 | Create P2P chat | `PutChatRequest` |
-| 64 | Get group info | `GetGroupInfoRequest` |
-| 5023 | Get user info | `GetUserInfoRequest` |
-| 11021 | Universal search | `UniversalSearchRequest` |
-
-### Auth Flow
-
-1. **Cookie init**: POST `/accounts/csrf` → get `swp_csrf_token` + refresh `sl_session`
-2. **User verify**: GET `/accounts/web/user` with CSRF → get user ID & name
-3. **Heartbeat**: CSRF refresh every 4h keeps `sl_session` alive (12h max-age)
-4. **UAT refresh**: Auto-refresh `user_access_token` using `refresh_token` when expired
 
 ## Session & Token Lifecycle
 
@@ -355,7 +401,7 @@ To use, copy `.claude/commands/` into your project.
 | App Token | `tenant_access_token` | 2h | Auto-managed by SDK |
 | User OAuth | `user_access_token` | ~2h | Auto-refreshed via `refresh_token`, saved to `.env` |
 
-When the cookie expires (after ~12-24h without heartbeat), re-login at feishu.cn and update `LARK_COOKIE` in `.env`. Use `get_login_status` to check health proactively.
+When the cookie expires (after ~12-24h without heartbeat), re-login at feishu.cn and update `LARK_COOKIE`. Use `get_login_status` to check health proactively.
 
 ## Project Structure
 
@@ -374,10 +420,6 @@ feishu-user-mcp/
 │   └── lark.proto        # Protobuf message definitions
 ├── .claude/
 │   └── commands/         # 8 Claude Code slash commands
-├── .github/              # Issue & PR templates
-├── CLAUDE.md             # AI project instructions
-├── CHANGELOG.md          # Version history
-├── CONTRIBUTING.md       # Contribution guide
 ├── server.json           # MCP Registry manifest
 ├── .env.example          # Configuration template
 └── package.json
@@ -386,17 +428,16 @@ feishu-user-mcp/
 ## Limitations
 
 - Cookie-based auth requires periodic refresh (auto-heartbeat extends to ~12h; manual re-login needed after that)
-- Depends on Feishu's internal Protobuf protocol — may break if Feishu updates their web client
+- Depends on Feishu's internal Protobuf protocol -- may break if Feishu updates their web client
 - Image/file/audio sending requires pre-uploaded keys (upload via Official API or external bridge)
 - No real-time message receiving (WebSocket push not yet implemented)
-- `get_user_info` may return null for some users due to proto definition limitations
-- May violate Feishu's Terms of Service — use at your own risk
+- May violate Feishu's Terms of Service -- use at your own risk
 
 ## Contributing
 
 Issues and PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and submission guidelines.
 
-If Feishu updates their protocol and something breaks, please [open an issue](https://github.com/EthanQC/feishu-user-mcp/issues/new?template=bug_report.md) with the error details so we can fix it quickly.
+If Feishu updates their protocol and something breaks, please [open an issue](https://github.com/EthanQC/feishu-user-mcp/issues/new?template=bug_report.md) with the error details.
 
 ## License
 
@@ -404,6 +445,6 @@ If Feishu updates their protocol and something breaks, please [open an issue](ht
 
 ## Acknowledgments
 
-- [cv-cat/LarkAgentX](https://github.com/cv-cat/LarkAgentX) — Original Feishu protocol reverse-engineering (Python)
-- [cv-cat/OpenFeiShuApis](https://github.com/cv-cat/OpenFeiShuApis) — Underlying API research
-- [Model Context Protocol](https://modelcontextprotocol.io) — The MCP standard
+- [cv-cat/LarkAgentX](https://github.com/cv-cat/LarkAgentX) -- Original Feishu protocol reverse-engineering (Python)
+- [cv-cat/OpenFeiShuApis](https://github.com/cv-cat/OpenFeiShuApis) -- Underlying API research
+- [Model Context Protocol](https://modelcontextprotocol.io) -- The MCP standard
