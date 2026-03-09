@@ -23,7 +23,7 @@ What should have happened.
 
 - Node.js version:
 - OS:
-- feishu-user-mcp version:
+- feishu-user-plugin version:
 
 ## Auth Status
 

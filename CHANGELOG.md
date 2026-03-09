@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.0] - 2026-03-09
+
+### Changed
+- Renamed from `feishu-user-mcp` to `feishu-user-plugin`
+- Converted to Claude Code Plugin standard structure (`.claude-plugin/`, `skills/`)
+- Skills moved from `.claude/commands/` to `skills/feishu-user-plugin/references/`
+- MCP server config template added (`.mcp.json`)
+- All client configurations now use `npx -y feishu-user-plugin`
+- Version reset to 1.0.0
+
+### Added
+- `.claude-plugin/plugin.json` — Plugin metadata
+- `skills/feishu-user-plugin/SKILL.md` — Main skill definition with allowed-tools
+- `skills/feishu-user-plugin/references/CLAUDE.md` — Troubleshooting guide
+
+### Fixed
+- Version number consistency across `package.json`, `src/index.js`, and `server.json`
+
 ## [0.5.1] - 2026-03-08
 
 ### Fixed

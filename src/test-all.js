@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Comprehensive test for all feishu-user-mcp tools.
+ * Comprehensive test for all feishu-user-plugin tools.
  * Sends test messages to "飞书plugin测试群".
  */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });

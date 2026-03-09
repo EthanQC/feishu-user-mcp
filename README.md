@@ -1,4 +1,4 @@
-# feishu-user-mcp
+# feishu-user-plugin
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green.svg)](https://nodejs.org)
@@ -39,7 +39,7 @@ User OAuth    (UAT):        You -> REST API -> Feishu (read P2P chats, list all 
 ### Option 1: npx (recommended)
 
 ```bash
-npx feishu-user-mcp
+npx feishu-user-plugin
 ```
 
 No installation needed. The package runs directly via npx.
@@ -47,8 +47,8 @@ No installation needed. The package runs directly via npx.
 ### Option 2: Clone and run locally
 
 ```bash
-git clone https://github.com/EthanQC/feishu-user-mcp.git
-cd feishu-user-mcp
+git clone https://github.com/EthanQC/feishu-user-plugin.git
+cd feishu-user-plugin
 npm install
 npm start
 ```
@@ -118,15 +118,21 @@ Each auth layer is independent. You can configure:
 
 ## How to Get Your Cookie
 
-**Option A: With Playwright MCP (recommended)**
+**Option A: Automated via Playwright MCP (recommended, zero manual copying)**
 
-If you have [Playwright MCP](https://github.com/anthropics/mcp-playwright) configured, let Claude Code handle it automatically — you just scan the QR code to log in:
-
-```js
-// Playwright can access HttpOnly cookies that document.cookie cannot
-const cookies = await context.cookies('https://www.feishu.cn');
-const cookieStr = cookies.map(c => c.name + '=' + c.value).join('; ');
+First, install Playwright MCP if you don't have it:
+```bash
+npx @anthropic-ai/claude-code mcp add playwright -- npx @anthropic-ai/mcp-server-playwright
 ```
+
+Then just tell Claude Code: **"Help me set up my Feishu cookie"**
+
+Claude Code will automatically:
+1. Open feishu.cn in a browser via Playwright
+2. Show you the QR code — scan it with Feishu mobile app
+3. Extract the full cookie (including HttpOnly) via `context.cookies()`
+4. Write it to your `.mcp.json` LARK_COOKIE field
+5. Prompt you to restart Claude Code
 
 **Option B: Manual (via Network tab)**
 
@@ -137,7 +143,7 @@ const cookieStr = cookies.map(c => c.name + '=' + c.value).join('; ');
 5. In the right panel, find **Request Headers** → **Cookie:** → right-click → **Copy value**
 6. Set it as `LARK_COOKIE` in your environment
 
-> ⚠️ **Do NOT** use `document.cookie` in the Console or copy from Application → Cookies tab individually — neither method captures HttpOnly cookies (`session`, `sl_session`), which are required for authentication.
+> Do NOT use `document.cookie` in the Console or copy from Application → Cookies tab — they miss HttpOnly cookies (`session`, `sl_session`) required for auth.
 
 > The server automatically refreshes the session via heartbeat every 4 hours. The `sl_session` cookie has a 12-hour max-age.
 
@@ -156,7 +162,7 @@ To read direct message history with `read_p2p_messages` and `list_user_chats`:
 node src/oauth.js
 
 # If you installed via npx:
-cd $(npm root -g)/feishu-user-mcp && node src/oauth.js
+cd $(npm root -g)/feishu-user-plugin && node src/oauth.js
 # Or clone the repo just for the OAuth step, then use npx for daily use
 ```
 
@@ -175,7 +181,7 @@ Add to your project's `.mcp.json` (or `~/.claude/.mcp.json` for global):
   "mcpServers": {
     "feishu": {
       "command": "npx",
-      "args": ["-y", "feishu-user-mcp"],
+      "args": ["-y", "feishu-user-plugin"],
       "env": {
         "LARK_COOKIE": "your-cookie-string",
         "LARK_APP_ID": "cli_xxxxxxxxxxxx",
@@ -193,7 +199,7 @@ Add to your project's `.mcp.json` (or `~/.claude/.mcp.json` for global):
   "mcpServers": {
     "feishu": {
       "command": "node",
-      "args": ["/absolute/path/to/feishu-user-mcp/src/index.js"],
+      "args": ["/absolute/path/to/feishu-user-plugin/src/index.js"],
       "env": {
         "LARK_COOKIE": "your-cookie-string",
         "LARK_APP_ID": "cli_xxxxxxxxxxxx",
@@ -218,7 +224,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "feishu": {
       "command": "npx",
-      "args": ["-y", "feishu-user-mcp"],
+      "args": ["-y", "feishu-user-plugin"],
       "env": {
         "LARK_COOKIE": "your-cookie-string",
         "LARK_APP_ID": "cli_xxxxxxxxxxxx",
@@ -238,7 +244,7 @@ Add to `.cursor/mcp.json` in your project:
   "mcpServers": {
     "feishu": {
       "command": "npx",
-      "args": ["-y", "feishu-user-mcp"],
+      "args": ["-y", "feishu-user-plugin"],
       "env": {
         "LARK_COOKIE": "your-cookie-string",
         "LARK_APP_ID": "cli_xxxxxxxxxxxx",
@@ -259,7 +265,7 @@ Add to `.vscode/mcp.json` in your project:
     "feishu": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "feishu-user-mcp"],
+      "args": ["-y", "feishu-user-plugin"],
       "env": {
         "LARK_COOKIE": "your-cookie-string",
         "LARK_APP_ID": "cli_xxxxxxxxxxxx",
@@ -279,7 +285,7 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
   "mcpServers": {
     "feishu": {
       "command": "npx",
-      "args": ["-y", "feishu-user-mcp"],
+      "args": ["-y", "feishu-user-plugin"],
       "env": {
         "LARK_COOKIE": "your-cookie-string",
         "LARK_APP_ID": "cli_xxxxxxxxxxxx",
@@ -374,7 +380,7 @@ Send messages as yourself, not as a bot.
 
 ## Claude Code Slash Commands (8 skills)
 
-This repo includes 8 ready-to-use [slash commands](https://docs.anthropic.com/en/docs/claude-code/tutorials#create-custom-slash-commands) in `.claude/commands/`:
+This plugin includes 8 built-in skills in `skills/feishu-user-plugin/`:
 
 | Skill | Usage | Description |
 |-------|-------|-------------|
@@ -387,7 +393,7 @@ This repo includes 8 ready-to-use [slash commands](https://docs.anthropic.com/en
 | `/wiki` | `/wiki search protocol` | Search and browse wiki |
 | `/status` | `/status` | Check login and auth status |
 
-To use these skills, copy `.claude/commands/` into your project.
+Skills are automatically available when the plugin is installed.
 
 ## Architecture
 
@@ -419,22 +425,26 @@ When the cookie expires (after ~12-24h without heartbeat), re-login at feishu.cn
 ## Project Structure
 
 ```
-feishu-user-mcp/
+feishu-user-plugin/
+├── .claude-plugin/
+│   └── plugin.json          # Plugin metadata
+├── skills/
+│   └── feishu-user-plugin/
+│       ├── SKILL.md         # Main skill definition (trigger, tools, auth)
+│       └── references/      # 8 skill reference docs + CLAUDE.md
 ├── src/
-│   ├── index.js          # MCP server entry point (33 tools)
-│   ├── client.js         # User identity client (Protobuf gateway)
-│   ├── official.js       # Official API client (REST, UAT)
-│   ├── utils.js          # ID generators, cookie parser
-│   ├── oauth.js          # OAuth flow for user_access_token
-│   ├── oauth-auto.js     # Automated OAuth with Playwright
-│   ├── test-send.js      # Quick CLI test
-│   └── test-all.js       # Full test suite
+│   ├── index.js             # MCP server entry point (33 tools)
+│   ├── client.js            # User identity client (Protobuf gateway)
+│   ├── official.js          # Official API client (REST, UAT)
+│   ├── utils.js             # ID generators, cookie parser
+│   ├── oauth.js             # OAuth flow for user_access_token
+│   ├── test-send.js         # Quick CLI test
+│   └── test-all.js          # Full test suite
 ├── proto/
-│   └── lark.proto        # Protobuf message definitions
-├── .claude/
-│   └── commands/         # 8 Claude Code slash commands
-├── server.json           # MCP Registry manifest
-├── .env.example          # Configuration template
+│   └── lark.proto           # Protobuf message definitions
+├── .mcp.json.example        # MCP server config template
+├── server.json              # MCP Registry manifest
+├── .env.example             # Configuration template
 └── package.json
 ```
 
@@ -450,7 +460,7 @@ feishu-user-mcp/
 
 Issues and PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and submission guidelines.
 
-If Feishu updates their protocol and something breaks, please [open an issue](https://github.com/EthanQC/feishu-user-mcp/issues/new?template=bug_report.md) with the error details.
+If Feishu updates their protocol and something breaks, please [open an issue](https://github.com/EthanQC/feishu-user-plugin/issues/new?template=bug_report.md) with the error details.
 
 ## License
 

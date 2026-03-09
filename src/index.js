@@ -29,7 +29,7 @@ class ChatIdMapper {
       }
       this.lastRefresh = Date.now();
     } catch (e) {
-      console.error('[feishu-user-mcp] ChatIdMapper refresh failed:', e.message);
+      console.error('[feishu-user-plugin] ChatIdMapper refresh failed:', e.message);
     }
   }
 
@@ -265,7 +265,7 @@ const TOOLS = [
   },
   {
     name: 'list_user_chats',
-    description: '[User UAT] List all chats the user is in (including P2P). Requires OAuth setup.',
+    description: '[User UAT] List group chats the user is in. Note: only returns groups, not P2P. For P2P chats, use search_contacts → create_p2p_chat → read_p2p_messages. Requires OAuth setup.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -303,7 +303,7 @@ const TOOLS = [
   },
   {
     name: 'reply_message',
-    description: '[Official API] Reply to a specific message by message_id (as bot).',
+    description: '[Official API] Reply to a specific message by message_id (as bot). Only works for text messages; other types return error 230054.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -490,7 +490,7 @@ const TOOLS = [
 // --- Server ---
 
 const server = new Server(
-  { name: 'feishu-user-mcp', version: '0.5.1' },
+  { name: 'feishu-user-plugin', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -584,8 +584,14 @@ async function handleTool(name, args) {
     }
     case 'get_user_info': {
       const c = await getUserClient();
-      const n = await c.getUserName(args.user_id, args.chat_id || '0');
-      return text(n ? `User ${args.user_id}: ${n}` : `Could not resolve user ${args.user_id}`);
+      // Try name cache first; if miss, do a search to populate cache
+      let n = await c.getUserName(args.user_id);
+      if (!n && args.user_id) {
+        // Try searching to populate the cache
+        await c.search(args.user_id);
+        n = await c.getUserName(args.user_id);
+      }
+      return text(n ? `User ${args.user_id}: ${n}` : `Could not resolve user ${args.user_id}. Try search_contacts with the user's name instead.`);
     }
     case 'get_login_status': {
       const parts = [];
@@ -685,7 +691,7 @@ async function handleTool(name, args) {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[feishu-user-mcp] MCP Server v0.5.4 — %d tools available', TOOLS.length);
+  console.error('[feishu-user-plugin] MCP Server v1.0.0 — %d tools available', TOOLS.length);
 }
 
 main().catch(console.error);

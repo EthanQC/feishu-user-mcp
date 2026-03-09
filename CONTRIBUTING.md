@@ -1,11 +1,11 @@
-# Contributing to feishu-user-mcp
+# Contributing to feishu-user-plugin
 
 Thanks for your interest in contributing! This document provides guidelines for contributing to this project.
 
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/<your-username>/feishu-user-mcp.git`
+2. Clone your fork: `git clone https://github.com/<your-username>/feishu-user-plugin.git`
 3. Install dependencies: `npm install`
 4. Copy config: `cp .env.example .env` and fill in your credentials
 5. Verify setup: `node src/test-send.js`

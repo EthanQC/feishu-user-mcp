@@ -5,10 +5,11 @@
  * 用法: node src/oauth.js
  *
  * 流程 (新版 End User Consent):
- * 1. 启动本地 HTTP 服务器 (端口 9997)
- * 2. 打开 accounts.feishu.cn 授权页面 (新版 OAuth 2.0)
- * 3. 用户点击"授权"后，用 /authen/v2/oauth/token 交换 token
- * 4. 保存到 .env 文件中的 LARK_USER_ACCESS_TOKEN
+ * 1. 查询应用信息，提示用户选择正确的飞书账号
+ * 2. 启动本地 HTTP 服务器 (端口 9997)
+ * 3. 打开 accounts.feishu.cn 授权页面 (新版 OAuth 2.0)
+ * 4. 用户点击"授权"后，用 /authen/v2/oauth/token 交换 token
+ * 5. 保存 access_token + refresh_token 到 .env
  */
 
 const http = require('http');
@@ -23,20 +24,56 @@ const APP_ID = process.env.LARK_APP_ID;
 const APP_SECRET = process.env.LARK_APP_SECRET;
 const PORT = 9997;
 const REDIRECT_URI = `http://127.0.0.1:${PORT}/callback`;
-const SCOPES = 'im:message im:message:readonly im:chat:readonly contact:user.base:readonly';
+// offline_access is required to get refresh_token for auto-renewal
+const SCOPES = 'offline_access im:message im:message:readonly im:chat:readonly contact:user.base:readonly';
 
 if (!APP_ID || !APP_SECRET) {
   console.error('Missing LARK_APP_ID or LARK_APP_SECRET in .env');
   process.exit(1);
 }
 
+// --- Fetch app info to help user pick the right account ---
+
+async function getAppInfo() {
+  try {
+    // Get app_access_token to query app details
+    const tokenRes = await fetch('https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET }),
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.app_access_token) return null;
+
+    // Get app info — try the direct app query first, fall back to underauditlist
+    let appName = null;
+    const directRes = await fetch(`https://open.feishu.cn/open-apis/application/v6/applications/${APP_ID}?lang=zh_cn`, {
+      headers: { 'Authorization': `Bearer ${tokenData.app_access_token}` },
+    });
+    const directData = await directRes.json();
+    appName = directData?.data?.app?.app_name;
+
+    if (!appName) {
+      const listRes = await fetch('https://open.feishu.cn/open-apis/application/v6/applications/underauditlist?lang=zh_cn&page_size=1', {
+        headers: { 'Authorization': `Bearer ${tokenData.app_access_token}` },
+      });
+      const listData = await listRes.json();
+      appName = listData?.data?.items?.[0]?.app_name;
+    }
+
+    return { appName, tenantKey: tokenData.tenant_key };
+  } catch {
+    return null;
+  }
+}
+
 async function exchangeCode(code) {
-  // Exchange code for user_access_token (new OAuth 2.0 v2 flow)
   const body = {
     grant_type: 'authorization_code',
     client_id: APP_ID,
     client_secret: APP_SECRET,
     code,
+    redirect_uri: REDIRECT_URI,
   };
   console.log('Token exchange request:', JSON.stringify({ ...body, client_secret: '***' }));
   const tokenRes = await fetch('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
@@ -69,7 +106,7 @@ function saveToken(tokenData) {
 
   const updates = {
     LARK_USER_ACCESS_TOKEN: tokenData.access_token,
-    LARK_USER_REFRESH_TOKEN: tokenData.refresh_token,
+    LARK_USER_REFRESH_TOKEN: tokenData.refresh_token || '',
     LARK_UAT_SCOPE: tokenData.scope || '',
     LARK_UAT_EXPIRES: String(Math.floor(Date.now() / 1000 + tokenData.expires_in)),
   };
@@ -101,16 +138,25 @@ const server = http.createServer(async (req, res) => {
       const tokenData = await exchangeCode(code);
       saveToken(tokenData);
 
+      const hasRefresh = !!tokenData.refresh_token;
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(`<h2>授权成功!</h2>
+      res.end(`<h2>✅ 授权成功!</h2>
 <p>access_token: ${tokenData.access_token.slice(0, 20)}...</p>
 <p>scope: ${tokenData.scope}</p>
 <p>expires_in: ${tokenData.expires_in}s</p>
+<p>refresh_token: ${hasRefresh ? '✅ 已获取（30天有效，支持自动续期）' : '❌ 未返回（token 将在 2 小时后过期，需重新授权）'}</p>
 <p>已保存到 .env，可以关闭此页面。</p>`);
 
       console.log('\n=== OAuth 授权成功 ===');
       console.log('scope:', tokenData.scope);
       console.log('expires_in:', tokenData.expires_in, 's');
+      console.log('refresh_token:', hasRefresh ? '✅ 已获取' : '❌ 未返回');
+      if (!hasRefresh) {
+        console.log('\n⚠️  未获取到 refresh_token。可能原因：');
+        console.log('   - 飞书应用未启用 offline_access 权限');
+        console.log('   - 授权时 scope 中未包含 offline_access');
+        console.log('   Token 将在 2 小时后过期，届时需要重新运行此脚本。');
+      }
       console.log('token 已保存到 .env');
 
       setTimeout(() => { server.close(); process.exit(0); }, 1000);
@@ -126,12 +172,32 @@ const server = http.createServer(async (req, res) => {
   res.end('Not found');
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  // New End User Consent authorize URL (accounts.feishu.cn, client_id, response_type=code)
+server.listen(PORT, '127.0.0.1', async () => {
   const authUrl = `https://accounts.feishu.cn/open-apis/authen/v1/authorize?client_id=${APP_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(SCOPES)}`;
 
+  console.log('='.repeat(60));
+  console.log('  飞书 OAuth 授权');
+  console.log('='.repeat(60));
+  console.log(`  应用 ID: ${APP_ID}`);
+
+  // Try to get app info for better guidance
+  const appInfo = await getAppInfo();
+  if (appInfo?.appName) {
+    console.log(`  应用名称: ${appInfo.appName}`);
+  }
+
+  console.log('');
+  console.log('  ⚠️  重要：请在浏览器中选择正确的飞书账号！');
+  console.log('  如果你有多个飞书账号（个人/公司），请确保选择');
+  console.log(`  与应用 ${APP_ID} 同一租户的账号。`);
+  console.log('');
+  console.log('  如果浏览器显示了错误的账号，请：');
+  console.log('  1. 先在 feishu.cn 切换到正确的租户/账号');
+  console.log('  2. 然后重新运行此脚本');
+  console.log('='.repeat(60));
+  console.log('');
   console.log('OAuth 服务器已启动，端口:', PORT);
-  console.log('正在打开浏览器进行授权...');
+  console.log('正在打开浏览器...');
   console.log('授权 URL:', authUrl);
 
   try {

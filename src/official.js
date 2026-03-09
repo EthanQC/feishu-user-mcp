@@ -28,12 +28,18 @@ class LarkOfficialClient {
   }
 
   async _getValidUAT() {
-    if (!this._uat) throw new Error('No user_access_token. Run: node src/oauth.js');
+    if (!this._uat) throw new Error('No user_access_token. Run: npx feishu-user-plugin oauth');
 
     const now = Math.floor(Date.now() / 1000);
-    if (this._uatExpires > now + 300) return this._uat;
+    // Proactively refresh if we know it's expiring within 5 min
+    if (this._uatExpires > 0 && this._uatExpires <= now + 300) {
+      return this._refreshUAT();
+    }
+    return this._uat;
+  }
 
-    if (!this._uatRefresh) throw new Error('UAT expired and no refresh token. Run: node src/oauth.js');
+  async _refreshUAT() {
+    if (!this._uatRefresh) throw new Error('UAT expired and no refresh token. Run: npx feishu-user-plugin oauth');
 
     const res = await fetch('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
       method: 'POST',
@@ -46,14 +52,18 @@ class LarkOfficialClient {
       }),
     });
     const data = await res.json();
-    // v2 response: access_token at top level or under data
     const tokenData = data.access_token ? data : data.data;
-    if (!tokenData?.access_token) throw new Error(`UAT refresh failed: ${JSON.stringify(data)}. Run: node src/oauth.js`);
+    if (!tokenData?.access_token) throw new Error(`UAT refresh failed: ${JSON.stringify(data)}. Run: npx feishu-user-plugin oauth`);
 
     this._uat = tokenData.access_token;
-    this._uatRefresh = tokenData.refresh_token;
-    this._uatExpires = now + tokenData.expires_in;
+    this._uatRefresh = tokenData.refresh_token || this._uatRefresh;
+    this._uatExpires = Math.floor(Date.now() / 1000) + tokenData.expires_in;
+    this._persistUAT();
+    console.error('[feishu-user-plugin] UAT refreshed successfully');
+    return this._uat;
+  }
 
+  _persistUAT() {
     const fs = require('fs');
     const path = require('path');
     const envPath = path.join(__dirname, '..', '.env');
@@ -70,37 +80,48 @@ class LarkOfficialClient {
       }
       fs.writeFileSync(envPath, env.trim() + '\n');
     } catch {}
-
-    console.error('[feishu-user-mcp] UAT refreshed successfully');
-    return this._uat;
   }
 
   // --- UAT-based IM operations (for P2P chats) ---
 
+  // Wrapper: call fn with UAT, retry once after refresh if auth fails (code 99991668/99991663)
+  async _withUAT(fn) {
+    let uat = await this._getValidUAT();
+    const data = await fn(uat);
+    if (data.code === 99991668 || data.code === 99991663) {
+      // Token invalid/expired — try refresh once
+      uat = await this._refreshUAT();
+      return fn(uat);
+    }
+    return data;
+  }
+
   async listChatsAsUser({ pageSize = 20, pageToken } = {}) {
-    const uat = await this._getValidUAT();
     const params = new URLSearchParams({ page_size: String(pageSize) });
     if (pageToken) params.set('page_token', pageToken);
-    const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats?${params}`, {
-      headers: { 'Authorization': `Bearer ${uat}` },
+    const data = await this._withUAT(async (uat) => {
+      const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats?${params}`, {
+        headers: { 'Authorization': `Bearer ${uat}` },
+      });
+      return res.json();
     });
-    const data = await res.json();
     if (data.code !== 0) throw new Error(`listChatsAsUser failed (${data.code}): ${data.msg}`);
     return { items: data.data.items || [], pageToken: data.data.page_token, hasMore: data.data.has_more };
   }
 
   async readMessagesAsUser(chatId, { pageSize = 20, startTime, endTime, pageToken } = {}) {
-    const uat = await this._getValidUAT();
     const params = new URLSearchParams({
       container_id_type: 'chat', container_id: chatId, page_size: String(pageSize),
     });
     if (startTime) params.set('start_time', startTime);
     if (endTime) params.set('end_time', endTime);
     if (pageToken) params.set('page_token', pageToken);
-    const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages?${params}`, {
-      headers: { 'Authorization': `Bearer ${uat}` },
+    const data = await this._withUAT(async (uat) => {
+      const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages?${params}`, {
+        headers: { 'Authorization': `Bearer ${uat}` },
+      });
+      return res.json();
     });
-    const data = await res.json();
     if (data.code !== 0) throw new Error(`readMessagesAsUser failed (${data.code}): ${data.msg}`);
     return {
       items: (data.data.items || []).map(m => this._formatMessage(m)),

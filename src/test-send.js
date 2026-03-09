@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Quick test for feishu-user-mcp
+ * Quick test for feishu-user-plugin
  *
  * Usage:
  *   node src/test-send.js                  # Check login status
@@ -45,7 +45,7 @@ async function main() {
     }
     case 'send': {
       const chatId = process.argv[3];
-      const text = process.argv[4] || '[feishu-user-mcp] test message';
+      const text = process.argv[4] || '[feishu-user-plugin] test message';
       if (!chatId) { console.error('Usage: send <chatId> [message]'); process.exit(1); }
       const result = await client.sendMessage(chatId, text);
       console.log('Send result:', result.success ? 'Success' : `Failed (status: ${result.status})`);

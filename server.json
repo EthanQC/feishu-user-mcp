@@ -1,16 +1,16 @@
 {
-  "name": "feishu-user-mcp",
-  "display_name": "Feishu/Lark All-in-One MCP Server",
-  "description": "All-in-one Feishu/Lark MCP Server — 33 tools, 3 auth layers: personal identity messaging (Protobuf), official API (REST), P2P chat reading (OAuth UAT)",
-  "version": "0.5.1",
+  "name": "feishu-user-plugin",
+  "display_name": "Feishu User Plugin for Claude Code",
+  "description": "All-in-one Feishu plugin — send messages as yourself, read chats, manage docs/tables/wiki. 33 tools + 8 skills, 3 auth layers.",
+  "version": "1.0.0",
   "icon": "https://www.feishu.cn/favicon.ico",
   "repository": {
     "type": "git",
-    "url": "https://github.com/EthanQC/feishu-user-mcp"
+    "url": "https://github.com/EthanQC/feishu-user-plugin"
   },
   "license": "MIT",
   "categories": ["communication", "messaging", "productivity"],
-  "tags": ["feishu", "lark", "im", "messaging", "docs", "bitable", "wiki", "protobuf", "mcp"],
+  "tags": ["feishu", "lark", "im", "messaging", "docs", "bitable", "wiki", "protobuf", "plugin", "claude-code"],
   "tools": [
     { "name": "send_to_user", "description": "Search user + send text message as yourself — one step" },
     { "name": "send_to_group", "description": "Search group + send text message as yourself — one step" },
@@ -49,8 +49,8 @@
   "installations": {
     "claude-code": {
       "type": "stdio",
-      "command": "node",
-      "args": ["src/index.js"]
+      "command": "npx",
+      "args": ["-y", "feishu-user-plugin"]
     }
   },
   "environment_variables": [

@@ -11,6 +11,19 @@ const MsgType = { POST: 2, FILE: 3, TEXT: 4, IMAGE: 5, AUDIO: 7, STICKER: 10, ME
 
 class LarkUserClient {
   constructor(cookieStr) {
+    // Validate cookie: HTTP headers require all characters ≤ 255 (ByteString).
+    // Users sometimes accidentally include Chinese text when copying cookies from browser.
+    const nonAsciiMatch = cookieStr.match(/[^\x00-\xff]/);
+    if (nonAsciiMatch) {
+      const idx = cookieStr.indexOf(nonAsciiMatch[0]);
+      const context = cookieStr.substring(Math.max(0, idx - 20), idx + 20);
+      throw new Error(
+        `LARK_COOKIE contains non-ASCII character "${nonAsciiMatch[0]}" (U+${nonAsciiMatch[0].charCodeAt(0).toString(16).toUpperCase()}) at index ${idx}.\n` +
+        `Context: ...${context}...\n` +
+        'This usually means extra text was accidentally copied with the cookie.\n' +
+        'Fix: In DevTools Network tab → first request → Request Headers → Cookie → copy ONLY the cookie value.'
+      );
+    }
     this.cookieObj = parseCookie(cookieStr);
     this.cookieStr = cookieStr;
     this.csrfToken = null;
@@ -27,7 +40,7 @@ class LarkUserClient {
     if (!this.userId) {
       throw new Error('Failed to authenticate. Cookie may be expired — re-login at feishu.cn and update LARK_COOKIE.');
     }
-    console.error(`[feishu-user-mcp] Initialized as user: ${this.userName || this.userId}`);
+    console.error(`[feishu-user-plugin] Initialized as user: ${this.userName || this.userId}`);
     this._startHeartbeat();
   }
 
@@ -50,7 +63,7 @@ class LarkUserClient {
     }
     this.cookieStr = formatCookie(this.cookieObj);
     if (!this.csrfToken) {
-      console.error('[feishu-user-mcp] Warning: Could not obtain CSRF token');
+      console.error('[feishu-user-plugin] Warning: Could not obtain CSRF token');
     }
   }
 
@@ -77,9 +90,9 @@ class LarkUserClient {
     this._heartbeatTimer = setInterval(async () => {
       try {
         await this._getCsrfToken();
-        console.error('[feishu-user-mcp] Cookie heartbeat: session refreshed');
+        console.error('[feishu-user-plugin] Cookie heartbeat: session refreshed');
       } catch (e) {
-        console.error('[feishu-user-mcp] Cookie heartbeat failed:', e.message);
+        console.error('[feishu-user-plugin] Cookie heartbeat failed:', e.message);
       }
     }, 4 * 60 * 60 * 1000); // 4 hours
     // Don't keep the process alive just for heartbeat
@@ -283,12 +296,17 @@ class LarkUserClient {
 
     if (!packet.payload) return [];
     const searchRes = this._decode('UniversalSearchResponse', packet.payload);
-    return (searchRes.results || []).map((r) => ({
+    const items = (searchRes.results || []).map((r) => ({
       id: r.id,
       type: r.type === 1 ? 'user' : r.type === 3 ? 'group' : 'bot',
       title: r.titleHighlighted?.replace(/<[^>]+>/g, '') || '',
       summary: r.summaryHighlighted?.replace(/<[^>]+>/g, '') || '',
     }));
+    // Cache names for getUserName lookups
+    for (const item of items) {
+      if (item.title) this._nameCache.set(String(item.id), item.title);
+    }
+    return items;
   }
 
   // --- Create P2P Chat (cmd=13) ---
@@ -326,24 +344,18 @@ class LarkUserClient {
     };
   }
 
-  // --- Get User Name (cmd=5023) ---
+  // --- Get User Name ---
 
-  async getUserName(userId, chatId) {
-    const { packet } = await this._gateway(5023, 'GetUserInfoRequest', {
-      userId: parseInt(userId),
-      chatId: chatId ? parseInt(chatId) : 0,
-      userType: 1,
-    });
+  // Name cache populated by search() and init()
+  _nameCache = new Map();
 
-    if (!packet.payload) return null;
-    const userInfo = this._decode('UserInfo', packet.payload);
-    const detail = userInfo?.userInfoDetail?.detail;
-    if (detail?.locales) {
-      const zhEntry = detail.locales.find((l) => l.keyString === 'zh_cn');
-      if (zhEntry) return zhEntry.translation;
-    }
-    if (detail?.nickname) {
-      return Buffer.isBuffer(detail.nickname) ? detail.nickname.toString('utf-8') : String(detail.nickname);
+  async getUserName(userId) {
+    // Check cache first (populated by search, init, and previous lookups)
+    if (this._nameCache.has(String(userId))) return this._nameCache.get(String(userId));
+    // Self
+    if (String(userId) === String(this.userId) && this.userName) {
+      this._nameCache.set(String(userId), this.userName);
+      return this.userName;
     }
     return null;
   }

@@ -1,4 +1,4 @@
-# feishu-user-mcp
+# feishu-user-plugin
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-green.svg)](https://nodejs.org)
@@ -119,27 +119,31 @@
 ### 1. 克隆并安装
 
 ```bash
-git clone https://github.com/EthanQC/feishu-user-mcp.git
-cd feishu-user-mcp
+git clone https://github.com/EthanQC/feishu-user-plugin.git
+cd feishu-user-plugin
 npm install
 ```
 
 ### 2. 获取 Cookie
 
-登录 [feishu.cn/messenger](https://www.feishu.cn/messenger/)，然后提取 Cookie。
+> **重要**：需要 HttpOnly 的 Cookie（如 `session`、`sl_session`），`document.cookie` 无法获取。
 
-> **重要**：需要 HttpOnly 的 Cookie（如 `session`），`document.cookie` 无法获取。
+**方法一：Playwright 自动获取（推荐，零手动操作）**
 
-**方法一：浏览器 DevTools（手动）**
-1. 打开 `F12` → `应用` → `Cookie` → `https://www.feishu.cn`
-2. 全选所有 Cookie，右键复制
-3. 格式化为 `name1=value1; name2=value2; ...` 字符串
-
-**方法二：Playwright（推荐，可获取 HttpOnly Cookie）**
-```js
-const cookies = await context.cookies('https://www.feishu.cn');
-const cookieStr = cookies.map(c => c.name + '=' + c.value).join('; ');
+确保已安装 Playwright MCP：
+```bash
+npx @anthropic-ai/claude-code mcp add playwright -- npx @anthropic-ai/mcp-server-playwright
 ```
+
+然后在 Claude Code 里直接说："帮我设置飞书 Cookie"。Claude Code 会自动打开浏览器 → 你扫码登录 → 自动提取 Cookie 并写入配置。
+
+**方法二：浏览器 DevTools（手动）**
+1. 打开 [feishu.cn/messenger](https://www.feishu.cn/messenger/) 登录
+2. `F12` → **Network** 标签 → 勾选 **Disable cache** → `Cmd+R` 刷新
+3. 点击请求列表第一个请求 → 右侧 **Request Headers** → **Cookie:** → 右键 → **Copy value**
+4. 粘贴到 `.mcp.json` 的 `LARK_COOKIE` 字段
+
+> 不要用 `document.cookie` 或 Application → Cookies 标签 — 它们获取不到关键的 HttpOnly Cookie。
 
 ### 3. 配置
 
@@ -197,11 +201,14 @@ node src/test-all.js               # 运行完整测试
 ```json
 {
   "mcpServers": {
-    "feishu-user-mcp": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/绝对路径/feishu-user-mcp/src/index.js"],
-      "env": {}
+    "feishu-user-plugin": {
+      "command": "npx",
+      "args": ["-y", "feishu-user-plugin"],
+      "env": {
+        "LARK_COOKIE": "你的飞书Cookie",
+        "LARK_APP_ID": "cli_xxxxxxxxxxxx",
+        "LARK_APP_SECRET": "你的应用密钥"
+      }
     }
   }
 }
@@ -222,9 +229,9 @@ node src/test-all.js               # 运行完整测试
 ```json
 {
   "mcpServers": {
-    "feishu-user-mcp": {
+    "feishu-user-plugin": {
       "command": "node",
-      "args": ["/绝对路径/feishu-user-mcp/src/index.js"]
+      "args": ["/绝对路径/feishu-user-plugin/src/index.js"]
     }
   }
 }
@@ -241,7 +248,7 @@ node src/test-all.js               # 运行完整测试
 
 ## Claude Code 技能
 
-仓库包含 8 个即用的 [slash commands](https://docs.anthropic.com/en/docs/claude-code/tutorials#create-custom-slash-commands)（`.claude/commands/`）：
+插件内置 8 个技能（`skills/feishu-user-plugin/`）：
 
 | 技能 | 用法 | 说明 |
 |------|------|------|
@@ -254,7 +261,7 @@ node src/test-all.js               # 运行完整测试
 | `/wiki` | `/wiki search 协议` | 搜索和浏览知识库 |
 | `/status` | `/status` | 检查登录和认证状态 |
 
-使用方法：将 `.claude/commands/` 复制到你的项目中。
+安装插件后技能自动可用。
 
 ## 架构
 
@@ -295,26 +302,30 @@ Cookie 过期后（无心跳约 12-24h），需重新登录 feishu.cn 更新 `LA
 ## 项目结构
 
 ```
-feishu-user-mcp/
+feishu-user-plugin/
+├── .claude-plugin/
+│   └── plugin.json          # 插件元数据
+├── skills/
+│   └── feishu-user-plugin/
+│       ├── SKILL.md         # 主技能定义（触发条件、工具、认证）
+│       └── references/      # 8 个技能参考文档 + CLAUDE.md
 ├── src/
-│   ├── index.js          # MCP 服务器入口（33 个工具）
-│   ├── client.js         # 用户身份客户端（Protobuf 网关）
-│   ├── official.js       # 官方 API 客户端（REST、UAT）
-│   ├── utils.js          # ID 生成器、Cookie 解析
-│   ├── oauth.js          # OAuth 授权流程
-│   ├── oauth-auto.js     # Playwright 自动化 OAuth
-│   ├── test-send.js      # 快速 CLI 测试
-│   └── test-all.js       # 完整测试套件
+│   ├── index.js             # MCP 服务器入口（33 个工具）
+│   ├── client.js            # 用户身份客户端（Protobuf 网关）
+│   ├── official.js          # 官方 API 客户端（REST、UAT）
+│   ├── utils.js             # ID 生成器、Cookie 解析
+│   ├── oauth.js             # OAuth 授权流程
+│   ├── test-send.js         # 快速 CLI 测试
+│   └── test-all.js          # 完整测试套件
 ├── proto/
-│   └── lark.proto        # Protobuf 消息定义
-├── .claude/
-│   └── commands/         # 8 个 Claude Code 技能
-├── .github/              # Issue 和 PR 模板
-├── CLAUDE.md             # AI 项目指令
-├── CHANGELOG.md          # 版本历史
-├── CONTRIBUTING.md       # 贡献指南
-├── server.json           # MCP Registry 清单
-├── .env.example          # 配置模板
+│   └── lark.proto           # Protobuf 消息定义
+├── .mcp.json.example        # MCP 配置模板
+├── .github/                 # Issue 和 PR 模板
+├── CLAUDE.md                # AI 项目指令
+├── CHANGELOG.md             # 版本历史
+├── CONTRIBUTING.md          # 贡献指南
+├── server.json              # MCP Registry 清单
+├── .env.example             # 配置模板
 └── package.json
 ```
 
@@ -331,7 +342,7 @@ feishu-user-mcp/
 
 欢迎提 Issue 和 PR！开发设置、代码规范和提交指南请参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-如果飞书更新协议导致功能异常，请[提交 Issue](https://github.com/EthanQC/feishu-user-mcp/issues/new?template=bug_report.md) 并附上错误详情，我们会尽快修复。
+如果飞书更新协议导致功能异常，请[提交 Issue](https://github.com/EthanQC/feishu-user-plugin/issues/new?template=bug_report.md) 并附上错误详情，我们会尽快修复。
 
 ## 许可证
 
