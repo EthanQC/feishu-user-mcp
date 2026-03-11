@@ -30,7 +30,7 @@ All-in-one Feishu plugin for Claude Code with three auth layers:
 - `list_user_chats` — List group chats the user is in. Note: API only returns groups, not P2P. For P2P, use: `search_contacts` → `create_p2p_chat` → `read_p2p_messages`.
 
 ### Official API Tools (app credentials)
-- `list_chats` / `read_messages` — Chat history (read_messages accepts chat name, auto-resolves to oc_ ID via bot's group list + im.chat.search). Returns newest messages first by default. Messages include sender names.
+- `list_chats` / `read_messages` — Chat history (read_messages accepts chat name, oc_ ID, or numeric ID; auto-resolves via bot's group list → im.chat.search → search_contacts). **Auto-falls back to UAT for external groups the bot cannot access.** Returns newest messages first by default. Messages include sender names.
 - `reply_message` / `forward_message` — Message operations (as bot)
 - `search_docs` / `read_doc` / `create_doc` — Document operations
 - `list_bitable_tables` / `list_bitable_fields` / `search_bitable_records` — Table queries
@@ -42,7 +42,7 @@ All-in-one Feishu plugin for Claude Code with three auth layers:
 ## Usage Patterns
 - Send text as yourself → `send_to_user` or `send_to_group`
 - Send rich content → `send_post_as_user` (formatted text), `send_image_as_user` (images)
-- Read group chat history → `read_messages` with chat name or oc_ ID (newest first by default)
+- Read any group chat history → `read_messages` with chat name or ID (auto-handles external groups via UAT fallback)
 - Read P2P chat history → `search_contacts` → `create_p2p_chat` → `read_p2p_messages`
 - Reply as user in thread → `send_as_user` with root_id
 - Reply as bot → `reply_message` (official API)
@@ -203,9 +203,9 @@ Tell user to restart Claude Code. Only ONE restart should be needed.
 
 ### If read_messages returns an error
 - Error messages now include the actual Feishu error code and description
-- Common causes: bot not in the group, missing `im:message:readonly` scope, invalid chat_id
-- Chat name resolution uses both bot's group list AND `im.chat.search` API as fallback
-- If bot can't read a group, try `read_p2p_messages` with UAT instead
+- `read_messages` auto-falls back to UAT when bot API fails (e.g. external groups)
+- Chat name resolution: bot's group list → `im.chat.search` → `search_contacts` (cookie)
+- If all three strategies fail, provide the oc_xxx or numeric chat ID directly
 
 ### If UAT refresh fails with "invalid_grant" (error 28003/20003/20005)
 - The refresh token has expired or been revoked — auto-refresh cannot recover this

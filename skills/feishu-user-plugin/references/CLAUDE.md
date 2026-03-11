@@ -30,7 +30,7 @@ All-in-one Feishu plugin for Claude Code with three auth layers:
 - `list_user_chats` — List group chats the user is in. Note: API only returns groups, not P2P. For P2P, use: `search_contacts` → `create_p2p_chat` → `read_p2p_messages`.
 
 ### Official API Tools (app credentials)
-- `list_chats` / `read_messages` — Chat history (read_messages accepts chat name, auto-resolves to oc_ ID)
+- `list_chats` / `read_messages` — Chat history (accepts chat name, oc_ ID, or numeric ID; auto-falls back to UAT for external groups)
 - `reply_message` / `forward_message` — Message operations (as bot). reply_message only works for text messages.
 - `search_docs` / `read_doc` / `create_doc` — Document operations
 - `list_bitable_tables` / `list_bitable_fields` / `search_bitable_records` — Table queries
@@ -42,7 +42,7 @@ All-in-one Feishu plugin for Claude Code with three auth layers:
 ## Usage Patterns
 - Send text as yourself → `send_to_user` or `send_to_group`
 - Send rich content → `send_post_as_user` (formatted text), `send_image_as_user` (images)
-- Read group chat history → `read_messages` with chat name or oc_ ID
+- Read any group chat history → `read_messages` with chat name or ID (auto-handles external groups via UAT fallback)
 - Read P2P chat history → `search_contacts` → `create_p2p_chat` → `read_p2p_messages`
 - Reply as user in thread → `send_as_user` with root_id
 - Reply as bot → `reply_message` (official API, text messages only)

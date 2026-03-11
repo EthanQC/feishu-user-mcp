@@ -48,6 +48,8 @@ class ChatIdMapper {
 
   async resolveToOcId(chatIdOrName, official) {
     if (chatIdOrName.startsWith('oc_')) return chatIdOrName;
+    // Also accept raw numeric IDs (from search_contacts)
+    if (/^\d+$/.test(chatIdOrName)) return chatIdOrName;
     // Strategy 1: Search in bot's group list cache
     const cached = await this.findByName(chatIdOrName, official);
     if (cached) return cached;
@@ -64,6 +66,27 @@ class ChatIdMapper {
       }
     } catch (e) {
       console.error('[feishu-user-plugin] chatSearch fallback failed:', e.message);
+    }
+    return null;
+  }
+
+  // Strategy 3: Use search_contacts (cookie-based) to find external groups by name
+  // Returns numeric chat_id that works with UAT readMessagesAsUser
+  async resolveViaContacts(chatName, userClient) {
+    if (!userClient) return null;
+    try {
+      const results = await userClient.search(chatName);
+      const groups = results.filter(r => r.type === 'group');
+      // Exact match first
+      for (const g of groups) {
+        if (g.title === chatName) return String(g.id);
+      }
+      // Partial match
+      for (const g of groups) {
+        if (g.title && g.title.includes(chatName)) return String(g.id);
+      }
+    } catch (e) {
+      console.error('[feishu-user-plugin] search_contacts fallback failed:', e.message);
     }
     return null;
   }
@@ -306,11 +329,11 @@ const TOOLS = [
   },
   {
     name: 'read_messages',
-    description: '[Official API] Read message history. Accepts oc_xxx ID or chat name (auto-searched via bot group list + im.chat.search). Returns newest messages first by default, with sender names resolved.',
+    description: '[Official API + UAT fallback] Read message history from any group. Accepts oc_xxx ID, numeric ID, or chat name (auto-searched). Auto-falls back to UAT for external groups the bot cannot access. Returns newest messages first by default, with sender names resolved.',
     inputSchema: {
       type: 'object',
       properties: {
-        chat_id: { type: 'string', description: 'Chat ID (oc_xxx) or chat name (auto-searched)' },
+        chat_id: { type: 'string', description: 'Chat ID (oc_xxx), numeric ID, or chat name (auto-searched via bot groups, im.chat.search, and user contacts)' },
         page_size: { type: 'number', description: 'Messages to fetch (default 20, max 50)' },
         start_time: { type: 'string', description: 'Start timestamp in seconds (optional)' },
         end_time: { type: 'string', description: 'End timestamp in seconds (optional)' },
@@ -508,7 +531,7 @@ const TOOLS = [
 // --- Server ---
 
 const server = new Server(
-  { name: 'feishu-user-plugin', version: '1.1.0' },
+  { name: 'feishu-user-plugin', version: '1.1.1' },
   { capabilities: { tools: {} } }
 );
 
@@ -653,14 +676,38 @@ async function handleTool(name, args) {
       return json(await getOfficialClient().listChats({ pageSize: args.page_size, pageToken: args.page_token }));
     case 'read_messages': {
       const official = getOfficialClient();
+      const msgOpts = { pageSize: args.page_size, startTime: args.start_time, endTime: args.end_time, sortType: args.sort_type };
       const resolvedChatId = await chatIdMapper.resolveToOcId(args.chat_id, official);
-      if (!resolvedChatId) {
-        return text(`Cannot resolve "${args.chat_id}" to oc_ ID. Searched bot's group list and used im.chat.search API — no match found.\nTry: list_chats to see all bot groups, or provide the oc_xxx ID directly.\nIf the bot is not in this group, use read_p2p_messages with UAT instead.`);
+
+      // Try bot API first if we resolved an oc_ ID
+      if (resolvedChatId) {
+        try {
+          return json(await official.readMessages(resolvedChatId, msgOpts));
+        } catch (botErr) {
+          // Bot API failed (e.g. bot not in group, no permission) — fall through to UAT
+          console.error(`[feishu-user-plugin] read_messages bot API failed for ${resolvedChatId}: ${botErr.message}`);
+          if (official.hasUAT) {
+            try {
+              return json(await official.readMessagesAsUser(resolvedChatId, msgOpts));
+            } catch (uatErr) {
+              console.error(`[feishu-user-plugin] read_messages UAT fallback also failed for ${resolvedChatId}: ${uatErr.message}`);
+            }
+          }
+          throw botErr; // Re-throw original error if UAT also failed
+        }
       }
-      return json(await official.readMessages(resolvedChatId, {
-        pageSize: args.page_size, startTime: args.start_time, endTime: args.end_time,
-        sortType: args.sort_type,
-      }));
+
+      // Bot couldn't resolve the chat name — try search_contacts + UAT for external groups
+      if (official.hasUAT) {
+        let contactClient = null;
+        try { contactClient = await getUserClient(); } catch (_) {}
+        const contactChatId = await chatIdMapper.resolveViaContacts(args.chat_id, contactClient);
+        if (contactChatId) {
+          return json(await official.readMessagesAsUser(contactChatId, msgOpts));
+        }
+      }
+
+      return text(`Cannot resolve "${args.chat_id}" to a chat ID.\nSearched: bot's group list, im.chat.search API, and user contacts (search_contacts).\nTry: provide the oc_xxx or numeric chat ID directly.`);
     }
     case 'reply_message':
       return text(`Reply sent: ${(await getOfficialClient().replyMessage(args.message_id, args.text)).messageId}`);
@@ -725,7 +772,7 @@ async function main() {
   const hasCookie = !!process.env.LARK_COOKIE;
   const hasApp = !!(process.env.LARK_APP_ID && process.env.LARK_APP_SECRET);
   const hasUAT = !!process.env.LARK_USER_ACCESS_TOKEN;
-  console.error(`[feishu-user-plugin] MCP Server v1.1.0 — ${TOOLS.length} tools`);
+  console.error(`[feishu-user-plugin] MCP Server v1.1.1 — ${TOOLS.length} tools`);
   console.error(`[feishu-user-plugin] Auth: Cookie=${hasCookie ? 'YES' : 'NO'} App=${hasApp ? 'YES' : 'NO'} UAT=${hasUAT ? 'YES' : 'NO'}`);
   if (!hasCookie) console.error('[feishu-user-plugin] WARNING: LARK_COOKIE not set — user identity tools (send_to_user, etc.) will fail');
   if (!hasApp) console.error('[feishu-user-plugin] WARNING: LARK_APP_ID/SECRET not set — official API tools (read_messages, docs, etc.) will fail');
