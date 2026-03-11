@@ -156,7 +156,11 @@ class LarkOfficialClient {
     return { items: data.data.items || [], pageToken: data.data.page_token, hasMore: data.data.has_more };
   }
 
-  async readMessagesAsUser(chatId, { pageSize = 20, startTime, endTime, pageToken, sortType = 'ByCreateTimeDesc' } = {}) {
+  async readMessagesAsUser(chatId, { pageSize = 20, startTime, endTime, pageToken, sortType = 'ByCreateTimeDesc' } = {}, userClient) {
+    // Feishu API requires end_time >= start_time; auto-set end_time to now if missing
+    if (startTime && !endTime) {
+      endTime = String(Math.floor(Date.now() / 1000));
+    }
     const params = new URLSearchParams({
       container_id_type: 'chat', container_id: chatId, page_size: String(pageSize),
       sort_type: sortType,
@@ -172,7 +176,7 @@ class LarkOfficialClient {
     });
     if (data.code !== 0) throw new Error(`readMessagesAsUser failed (${data.code}): ${data.msg}`);
     const items = (data.data.items || []).map(m => this._formatMessage(m));
-    await this._populateSenderNames(items);
+    await this._populateSenderNames(items, userClient);
     return { items, hasMore: data.data.has_more, pageToken: data.data.page_token };
   }
 
@@ -186,14 +190,14 @@ class LarkOfficialClient {
     return { items: res.data.items || [], pageToken: res.data.page_token, hasMore: res.data.has_more };
   }
 
-  async readMessages(chatId, { pageSize = 20, startTime, endTime, pageToken, sortType = 'ByCreateTimeDesc' } = {}) {
+  async readMessages(chatId, { pageSize = 20, startTime, endTime, pageToken, sortType = 'ByCreateTimeDesc' } = {}, userClient) {
     const params = { container_id_type: 'chat', container_id: chatId, page_size: pageSize, sort_type: sortType };
     if (startTime) params.start_time = startTime;
     if (endTime) params.end_time = endTime;
     if (pageToken) params.page_token = pageToken;
     const res = await this._safeSDKCall(() => this.client.im.message.list({ params }), 'readMessages');
     const items = (res.data.items || []).map(m => this._formatMessage(m));
-    await this._populateSenderNames(items);
+    await this._populateSenderNames(items, userClient);
     return { items, hasMore: res.data.has_more, pageToken: res.data.page_token };
   }
 
@@ -429,7 +433,7 @@ class LarkOfficialClient {
     return null;
   }
 
-  async _populateSenderNames(items) {
+  async _populateSenderNames(items, userClient) {
     // Collect unique sender IDs that aren't cached
     const unknownIds = new Set();
     for (const item of items) {
@@ -437,9 +441,20 @@ class LarkOfficialClient {
         unknownIds.add(item.senderId);
       }
     }
-    // Batch resolve (sequential, with caching to avoid duplicate calls)
+    // Batch resolve via official contact API
     for (const id of unknownIds) {
       await this.getUserById(id);
+    }
+    // Fallback: resolve remaining unknowns via cookie-based user identity client
+    if (userClient) {
+      for (const id of unknownIds) {
+        if (!this._userNameCache.has(id) || !this._userNameCache.get(id)) {
+          try {
+            const name = await userClient.getUserName(id);
+            if (name) this._userNameCache.set(id, name);
+          } catch {}
+        }
+      }
     }
     // Populate senderName field
     for (const item of items) {

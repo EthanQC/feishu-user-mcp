@@ -531,7 +531,7 @@ const TOOLS = [
 // --- Server ---
 
 const server = new Server(
-  { name: 'feishu-user-plugin', version: '1.1.1' },
+  { name: 'feishu-user-plugin', version: '1.1.2' },
   { capabilities: { tools: {} } }
 );
 
@@ -662,10 +662,34 @@ async function handleTool(name, args) {
 
     case 'read_p2p_messages': {
       const official = getOfficialClient();
-      return json(await official.readMessagesAsUser(args.chat_id, {
+      let chatId = args.chat_id;
+      // If chat_id is not numeric or oc_, try to resolve as user name → P2P chat
+      if (!/^\d+$/.test(chatId) && !chatId.startsWith('oc_')) {
+        let uc = null;
+        try { uc = await getUserClient(); } catch (_) {}
+        if (uc) {
+          const results = await uc.search(chatId);
+          const user = results.find(r => r.type === 'user');
+          if (user) {
+            const pChatId = await uc.createChat(String(user.id));
+            if (pChatId) chatId = String(pChatId);
+            else return text(`Found user "${user.title}" but failed to create P2P chat.`);
+          } else {
+            // Maybe it's a group name
+            const group = results.find(r => r.type === 'group');
+            if (group) chatId = String(group.id);
+            else return text(`Cannot resolve "${args.chat_id}" to a chat. Use search_contacts to find the ID first.`);
+          }
+        } else {
+          return text(`"${args.chat_id}" is not a valid chat ID. Provide a numeric ID or oc_xxx format. Use search_contacts + create_p2p_chat to get the ID.`);
+        }
+      }
+      let uc = null;
+      try { uc = await getUserClient(); } catch (_) {}
+      return json(await official.readMessagesAsUser(chatId, {
         pageSize: args.page_size, startTime: args.start_time, endTime: args.end_time,
         sortType: args.sort_type,
-      }));
+      }, uc));
     }
     case 'list_user_chats':
       return json(await getOfficialClient().listChatsAsUser({ pageSize: args.page_size, pageToken: args.page_token }));
@@ -677,18 +701,21 @@ async function handleTool(name, args) {
     case 'read_messages': {
       const official = getOfficialClient();
       const msgOpts = { pageSize: args.page_size, startTime: args.start_time, endTime: args.end_time, sortType: args.sort_type };
+      // Get userClient for name resolution fallback (best-effort)
+      let uc = null;
+      try { uc = await getUserClient(); } catch (_) {}
       const resolvedChatId = await chatIdMapper.resolveToOcId(args.chat_id, official);
 
       // Try bot API first if we resolved an oc_ ID
       if (resolvedChatId) {
         try {
-          return json(await official.readMessages(resolvedChatId, msgOpts));
+          return json(await official.readMessages(resolvedChatId, msgOpts, uc));
         } catch (botErr) {
           // Bot API failed (e.g. bot not in group, no permission) — fall through to UAT
           console.error(`[feishu-user-plugin] read_messages bot API failed for ${resolvedChatId}: ${botErr.message}`);
           if (official.hasUAT) {
             try {
-              return json(await official.readMessagesAsUser(resolvedChatId, msgOpts));
+              return json(await official.readMessagesAsUser(resolvedChatId, msgOpts, uc));
             } catch (uatErr) {
               console.error(`[feishu-user-plugin] read_messages UAT fallback also failed for ${resolvedChatId}: ${uatErr.message}`);
             }
@@ -699,11 +726,10 @@ async function handleTool(name, args) {
 
       // Bot couldn't resolve the chat name — try search_contacts + UAT for external groups
       if (official.hasUAT) {
-        let contactClient = null;
-        try { contactClient = await getUserClient(); } catch (_) {}
-        const contactChatId = await chatIdMapper.resolveViaContacts(args.chat_id, contactClient);
+        if (!uc) try { uc = await getUserClient(); } catch (_) {}
+        const contactChatId = await chatIdMapper.resolveViaContacts(args.chat_id, uc);
         if (contactChatId) {
-          return json(await official.readMessagesAsUser(contactChatId, msgOpts));
+          return json(await official.readMessagesAsUser(contactChatId, msgOpts, uc));
         }
       }
 
@@ -772,7 +798,7 @@ async function main() {
   const hasCookie = !!process.env.LARK_COOKIE;
   const hasApp = !!(process.env.LARK_APP_ID && process.env.LARK_APP_SECRET);
   const hasUAT = !!process.env.LARK_USER_ACCESS_TOKEN;
-  console.error(`[feishu-user-plugin] MCP Server v1.1.1 — ${TOOLS.length} tools`);
+  console.error(`[feishu-user-plugin] MCP Server v1.1.2 — ${TOOLS.length} tools`);
   console.error(`[feishu-user-plugin] Auth: Cookie=${hasCookie ? 'YES' : 'NO'} App=${hasApp ? 'YES' : 'NO'} UAT=${hasUAT ? 'YES' : 'NO'}`);
   if (!hasCookie) console.error('[feishu-user-plugin] WARNING: LARK_COOKIE not set — user identity tools (send_to_user, etc.) will fail');
   if (!hasApp) console.error('[feishu-user-plugin] WARNING: LARK_APP_ID/SECRET not set — official API tools (read_messages, docs, etc.) will fail');

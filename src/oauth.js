@@ -121,6 +121,31 @@ function saveToken(tokenData) {
   }
 
   fs.writeFileSync(envPath, envContent.trim() + '\n');
+
+  // Also persist to ~/.claude.json MCP config so MCP restart picks up tokens immediately
+  _persistToClaudeJson(updates);
+}
+
+function _persistToClaudeJson(updates) {
+  const claudeJsonPaths = [
+    path.join(process.env.HOME || '', '.claude.json'),
+    path.join(process.env.HOME || '', '.claude', '.claude.json'),
+  ];
+  for (const cjPath of claudeJsonPaths) {
+    try {
+      const raw = fs.readFileSync(cjPath, 'utf8');
+      const config = JSON.parse(raw);
+      const servers = config.mcpServers || {};
+      for (const name of ['feishu-user-plugin', 'feishu']) {
+        if (servers[name]?.env) {
+          Object.assign(servers[name].env, updates);
+          fs.writeFileSync(cjPath, JSON.stringify(config, null, 2) + '\n');
+          console.log(`[feishu-user-plugin] OAuth tokens persisted to ${cjPath}`);
+          return;
+        }
+      }
+    } catch {}
+  }
 }
 
 const server = http.createServer(async (req, res) => {
