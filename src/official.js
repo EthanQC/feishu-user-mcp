@@ -58,7 +58,8 @@ class LarkOfficialClient {
 
     this._uat = tokenData.access_token;
     this._uatRefresh = tokenData.refresh_token || this._uatRefresh;
-    this._uatExpires = Math.floor(Date.now() / 1000) + tokenData.expires_in;
+    const expiresIn = typeof tokenData.expires_in === 'number' && tokenData.expires_in > 0 ? tokenData.expires_in : 7200;
+    this._uatExpires = Math.floor(Date.now() / 1000) + expiresIn;
     this._persistUAT();
     console.error('[feishu-user-plugin] UAT refreshed successfully');
     return this._uat;
@@ -448,7 +449,7 @@ class LarkOfficialClient {
     // Fallback: resolve remaining unknowns via cookie-based user identity client
     if (userClient) {
       for (const id of unknownIds) {
-        if (!this._userNameCache.has(id) || !this._userNameCache.get(id)) {
+        if (!this._userNameCache.has(id)) {
           try {
             const name = await userClient.getUserName(id);
             if (name) this._userNameCache.set(id, name);

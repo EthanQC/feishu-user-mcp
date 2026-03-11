@@ -108,7 +108,7 @@ function saveToken(tokenData) {
     LARK_USER_ACCESS_TOKEN: tokenData.access_token,
     LARK_USER_REFRESH_TOKEN: tokenData.refresh_token || '',
     LARK_UAT_SCOPE: tokenData.scope || '',
-    LARK_UAT_EXPIRES: String(Math.floor(Date.now() / 1000 + tokenData.expires_in)),
+    LARK_UAT_EXPIRES: String(Math.floor(Date.now() / 1000 + (typeof tokenData.expires_in === 'number' && tokenData.expires_in > 0 ? tokenData.expires_in : 7200))),
   };
 
   for (const [key, val] of Object.entries(updates)) {
@@ -144,8 +144,11 @@ function _persistToClaudeJson(updates) {
           return;
         }
       }
-    } catch {}
+    } catch (e) {
+      console.error(`[feishu-user-plugin] Failed to persist tokens to ${cjPath}: ${e.message}`);
+    }
   }
+  console.error('[feishu-user-plugin] WARNING: Could not persist tokens to ~/.claude.json. Tokens saved to .env only — copy them to your MCP config manually.');
 }
 
 const server = http.createServer(async (req, res) => {

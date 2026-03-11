@@ -274,7 +274,7 @@ async function testUAT() {
 }
 
 async function main() {
-  console.log('=== feishu-user-plugin v1.1.2 — Comprehensive Test ===\n');
+  console.log('=== feishu-user-plugin v1.1.3 — Comprehensive Test ===\n');
 
   await testUserIdentity();
   console.log('');

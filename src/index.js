@@ -33,20 +33,28 @@ class ChatIdMapper {
     }
   }
 
+  // Case-insensitive name matching helper
+  static _nameMatch(haystack, needle, exact = false) {
+    if (!haystack || !needle) return false;
+    const h = haystack.toLowerCase(), n = needle.toLowerCase();
+    return exact ? h === n : h.includes(n);
+  }
+
   async findByName(name, official) {
     await this._refresh(official);
-    // Exact match first
+    // Exact match first (case-insensitive)
     for (const [ocId, chatName] of this.nameCache) {
-      if (chatName === name) return ocId;
+      if (ChatIdMapper._nameMatch(chatName, name, true)) return ocId;
     }
-    // Partial match
+    // Partial match (case-insensitive)
     for (const [ocId, chatName] of this.nameCache) {
-      if (chatName && chatName.includes(name)) return ocId;
+      if (ChatIdMapper._nameMatch(chatName, name)) return ocId;
     }
     return null;
   }
 
   async resolveToOcId(chatIdOrName, official) {
+    if (!chatIdOrName) return null;
     if (chatIdOrName.startsWith('oc_')) return chatIdOrName;
     // Also accept raw numeric IDs (from search_contacts)
     if (/^\d+$/.test(chatIdOrName)) return chatIdOrName;
@@ -58,11 +66,11 @@ class ChatIdMapper {
       const results = await official.chatSearch(chatIdOrName);
       for (const chat of results) {
         this.nameCache.set(chat.chat_id, chat.name || '');
-        if (chat.name === chatIdOrName) return chat.chat_id;
+        if (ChatIdMapper._nameMatch(chat.name, chatIdOrName, true)) return chat.chat_id;
       }
-      // Partial match on search results
+      // Partial match on search results (case-insensitive)
       for (const chat of results) {
-        if (chat.name && chat.name.includes(chatIdOrName)) return chat.chat_id;
+        if (ChatIdMapper._nameMatch(chat.name, chatIdOrName)) return chat.chat_id;
       }
     } catch (e) {
       console.error('[feishu-user-plugin] chatSearch fallback failed:', e.message);
@@ -77,13 +85,13 @@ class ChatIdMapper {
     try {
       const results = await userClient.search(chatName);
       const groups = results.filter(r => r.type === 'group');
-      // Exact match first
+      // Exact match first (case-insensitive)
       for (const g of groups) {
-        if (g.title === chatName) return String(g.id);
+        if (ChatIdMapper._nameMatch(g.title, chatName, true)) return String(g.id);
       }
-      // Partial match
+      // Partial match (case-insensitive)
       for (const g of groups) {
-        if (g.title && g.title.includes(chatName)) return String(g.id);
+        if (ChatIdMapper._nameMatch(g.title, chatName)) return String(g.id);
       }
     } catch (e) {
       console.error('[feishu-user-plugin] search_contacts fallback failed:', e.message);
@@ -531,7 +539,7 @@ const TOOLS = [
 // --- Server ---
 
 const server = new Server(
-  { name: 'feishu-user-plugin', version: '1.1.2' },
+  { name: 'feishu-user-plugin', version: '1.1.3' },
   { capabilities: { tools: {} } }
 );
 
@@ -663,10 +671,10 @@ async function handleTool(name, args) {
     case 'read_p2p_messages': {
       const official = getOfficialClient();
       let chatId = args.chat_id;
+      let uc = null;
+      try { uc = await getUserClient(); } catch (_) {}
       // If chat_id is not numeric or oc_, try to resolve as user name → P2P chat
       if (!/^\d+$/.test(chatId) && !chatId.startsWith('oc_')) {
-        let uc = null;
-        try { uc = await getUserClient(); } catch (_) {}
         if (uc) {
           const results = await uc.search(chatId);
           const user = results.find(r => r.type === 'user');
@@ -684,8 +692,6 @@ async function handleTool(name, args) {
           return text(`"${args.chat_id}" is not a valid chat ID. Provide a numeric ID or oc_xxx format. Use search_contacts + create_p2p_chat to get the ID.`);
         }
       }
-      let uc = null;
-      try { uc = await getUserClient(); } catch (_) {}
       return json(await official.readMessagesAsUser(chatId, {
         pageSize: args.page_size, startTime: args.start_time, endTime: args.end_time,
         sortType: args.sort_type,
@@ -798,7 +804,7 @@ async function main() {
   const hasCookie = !!process.env.LARK_COOKIE;
   const hasApp = !!(process.env.LARK_APP_ID && process.env.LARK_APP_SECRET);
   const hasUAT = !!process.env.LARK_USER_ACCESS_TOKEN;
-  console.error(`[feishu-user-plugin] MCP Server v1.1.2 — ${TOOLS.length} tools`);
+  console.error(`[feishu-user-plugin] MCP Server v1.1.3 — ${TOOLS.length} tools`);
   console.error(`[feishu-user-plugin] Auth: Cookie=${hasCookie ? 'YES' : 'NO'} App=${hasApp ? 'YES' : 'NO'} UAT=${hasUAT ? 'YES' : 'NO'}`);
   if (!hasCookie) console.error('[feishu-user-plugin] WARNING: LARK_COOKIE not set — user identity tools (send_to_user, etc.) will fail');
   if (!hasApp) console.error('[feishu-user-plugin] WARNING: LARK_APP_ID/SECRET not set — official API tools (read_messages, docs, etc.) will fail');
