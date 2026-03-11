@@ -1,0 +1,178 @@
+#!/usr/bin/env node
+/**
+ * Interactive setup wizard for feishu-user-plugin
+ *
+ * Writes MCP config to ~/.claude.json (or .mcp.json) with credentials.
+ * Does NOT require cloning the repo.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const ask = (q) => new Promise(resolve => rl.question(q, resolve));
+
+const CLAUDE_JSON_PATH = path.join(process.env.HOME || '', '.claude.json');
+const SERVER_NAME = 'feishu-user-plugin';
+
+async function main() {
+  console.log('='.repeat(60));
+  console.log('  feishu-user-plugin Setup Wizard');
+  console.log('='.repeat(60));
+  console.log('');
+
+  // Check existing config
+  let config = {};
+  let existingEnv = {};
+  try {
+    config = JSON.parse(fs.readFileSync(CLAUDE_JSON_PATH, 'utf8'));
+    const existing = config.mcpServers?.[SERVER_NAME]?.env || config.mcpServers?.feishu?.env;
+    if (existing) {
+      existingEnv = existing;
+      console.log('Found existing feishu-user-plugin config in ~/.claude.json');
+      const update = await ask('Update existing config? (Y/n): ');
+      if (update.toLowerCase() === 'n') {
+        console.log('Cancelled.');
+        rl.close();
+        return;
+      }
+    }
+  } catch {}
+
+  // Collect credentials
+  console.log('\n--- App Credentials ---');
+  console.log('Team members: press Enter to use the shared defaults.');
+  console.log('External users: get these from https://open.feishu.cn/app\n');
+
+  const defaultAppId = existingEnv.LARK_APP_ID || '';
+  const defaultAppSecret = existingEnv.LARK_APP_SECRET || '';
+
+  let appId = await ask(`LARK_APP_ID [${defaultAppId || 'required'}]: `);
+  appId = appId.trim() || defaultAppId;
+  if (!appId) {
+    console.error('Error: LARK_APP_ID is required.');
+    rl.close();
+    process.exit(1);
+  }
+
+  let appSecret = await ask(`LARK_APP_SECRET [${defaultAppSecret ? '***' : 'required'}]: `);
+  appSecret = appSecret.trim() || defaultAppSecret;
+  if (!appSecret) {
+    console.error('Error: LARK_APP_SECRET is required.');
+    rl.close();
+    process.exit(1);
+  }
+
+  // Validate app credentials
+  console.log('\nValidating app credentials...');
+  try {
+    const res = await fetch('https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    });
+    const data = await res.json();
+    if (data.app_access_token) {
+      console.log('App credentials: VALID');
+    } else {
+      console.error(`App credentials: INVALID — ${data.msg || JSON.stringify(data)}`);
+      console.error('Please check your LARK_APP_ID and LARK_APP_SECRET.');
+      rl.close();
+      process.exit(1);
+    }
+  } catch (e) {
+    console.warn(`Could not validate: ${e.message}. Continuing anyway.`);
+  }
+
+  // Cookie
+  console.log('\n--- Cookie ---');
+  console.log('Get your cookie from feishu.cn (Network tab → first request → Cookie header).');
+  console.log('Or let Claude Code + Playwright extract it automatically after setup.\n');
+
+  const existingCookie = existingEnv.LARK_COOKIE;
+  const hasCookie = existingCookie && existingCookie !== 'PLACEHOLDER' && existingCookie.includes('session=');
+  if (hasCookie) {
+    console.log('Existing cookie found (has session token).');
+    const keepCookie = await ask('Keep existing cookie? (Y/n): ');
+    if (keepCookie.toLowerCase() === 'n') {
+      console.log('You can update it later or use Playwright extraction.');
+    }
+  } else {
+    console.log('No valid cookie found. You can add it later via:');
+    console.log('  1. Tell Claude Code: "帮我设置飞书 Cookie" (with Playwright MCP)');
+    console.log('  2. Manual: DevTools → Network → Cookie header → paste into config');
+  }
+
+  const cookie = hasCookie ? existingCookie : 'SETUP_NEEDED';
+
+  // UAT
+  const existingUAT = existingEnv.LARK_USER_ACCESS_TOKEN;
+  const existingRT = existingEnv.LARK_USER_REFRESH_TOKEN;
+  const hasUAT = existingUAT && existingUAT !== 'PLACEHOLDER' && existingUAT.length > 20;
+
+  if (!hasUAT) {
+    console.log('\n--- OAuth UAT ---');
+    console.log('UAT not configured. After setup, run:');
+    console.log('  npx feishu-user-plugin oauth');
+    console.log('This will open a browser for OAuth consent.');
+  }
+
+  // Write config
+  console.log('\n--- Writing Config ---');
+
+  if (!config.mcpServers) config.mcpServers = {};
+  config.mcpServers[SERVER_NAME] = {
+    command: 'npx',
+    args: ['-y', 'feishu-user-plugin'],
+    env: {
+      LARK_COOKIE: cookie,
+      LARK_APP_ID: appId,
+      LARK_APP_SECRET: appSecret,
+      LARK_USER_ACCESS_TOKEN: hasUAT ? existingUAT : 'SETUP_NEEDED',
+      LARK_USER_REFRESH_TOKEN: hasUAT ? (existingRT || '') : '',
+    },
+  };
+
+  // Remove old 'feishu' entry if exists (consolidate)
+  if (config.mcpServers.feishu && config.mcpServers[SERVER_NAME]) {
+    delete config.mcpServers.feishu;
+  }
+
+  fs.writeFileSync(CLAUDE_JSON_PATH, JSON.stringify(config, null, 2) + '\n');
+  console.log(`Written to ${CLAUDE_JSON_PATH}`);
+
+  // Also write .env for oauth.js to use
+  const envPath = path.join(__dirname, '..', '.env');
+  const envContent = [
+    `LARK_APP_ID=${appId}`,
+    `LARK_APP_SECRET=${appSecret}`,
+    cookie !== 'SETUP_NEEDED' ? `LARK_COOKIE=${cookie}` : '',
+    hasUAT ? `LARK_USER_ACCESS_TOKEN=${existingUAT}` : '',
+    hasUAT && existingRT ? `LARK_USER_REFRESH_TOKEN=${existingRT}` : '',
+  ].filter(Boolean).join('\n') + '\n';
+  fs.writeFileSync(envPath, envContent);
+
+  // Summary
+  console.log('\n' + '='.repeat(60));
+  console.log('  Setup Complete!');
+  console.log('='.repeat(60));
+  console.log('');
+
+  const todo = [];
+  if (cookie === 'SETUP_NEEDED') todo.push('Get Cookie: tell Claude Code "帮我设置飞书 Cookie"');
+  if (!hasUAT) todo.push('Get UAT: run "npx feishu-user-plugin oauth"');
+  todo.push('Restart Claude Code');
+
+  console.log('Next steps:');
+  todo.forEach((t, i) => console.log(`  ${i + 1}. ${t}`));
+  console.log('');
+
+  rl.close();
+}
+
+main().catch(e => {
+  console.error('Setup failed:', e.message);
+  rl.close();
+  process.exit(1);
+});

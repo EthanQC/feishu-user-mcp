@@ -93,7 +93,7 @@ window.__COOKIE__
 
 **Step 4: Validate** — Must be pure ASCII, contain `session=` and `sl_session=`, length 500-5000. If >10000, it's contaminated.
 
-**Step 5: Write config** using exact format (NO `"type": "stdio"`):
+**Step 5: Write config** using exact format:
 ```json
 {
   "feishu-user-plugin": {

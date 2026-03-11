@@ -1,10 +1,10 @@
 {
   "name": "feishu-user-plugin",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "All-in-one Feishu plugin for Claude Code — send messages as yourself, read chats, manage docs/tables/wiki. 33 tools + 9 skills, 3 auth layers.",
   "main": "src/index.js",
   "bin": {
-    "feishu-user-plugin": "src/index.js"
+    "feishu-user-plugin": "src/cli.js"
   },
   "scripts": {
     "start": "node src/index.js",

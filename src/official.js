@@ -8,6 +8,7 @@ class LarkOfficialClient {
     this._uat = null;
     this._uatRefresh = null;
     this._uatExpires = 0;
+    this._userNameCache = new Map(); // open_id → display name
   }
 
   // --- UAT (User Access Token) Management ---
@@ -66,14 +67,60 @@ class LarkOfficialClient {
   _persistUAT() {
     const fs = require('fs');
     const path = require('path');
+    const updates = {
+      LARK_USER_ACCESS_TOKEN: this._uat,
+      LARK_USER_REFRESH_TOKEN: this._uatRefresh,
+      LARK_UAT_EXPIRES: String(this._uatExpires),
+    };
+
+    // Strategy 1: Update ~/.claude.json MCP config (works for npx users)
+    const claudeJsonPaths = [
+      path.join(process.env.HOME || '', '.claude.json'),
+      path.join(process.env.HOME || '', '.claude', '.claude.json'),
+    ];
+    for (const cjPath of claudeJsonPaths) {
+      try {
+        const raw = fs.readFileSync(cjPath, 'utf8');
+        const config = JSON.parse(raw);
+        const servers = config.mcpServers || {};
+        // Find our server entry by name
+        for (const name of ['feishu-user-plugin', 'feishu']) {
+          if (servers[name]?.env) {
+            Object.assign(servers[name].env, updates);
+            fs.writeFileSync(cjPath, JSON.stringify(config, null, 2) + '\n');
+            console.error('[feishu-user-plugin] UAT persisted to', cjPath);
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // Strategy 2: Update project .mcp.json
+    const mcpJsonPaths = [
+      path.join(process.cwd(), '.mcp.json'),
+    ];
+    for (const mjPath of mcpJsonPaths) {
+      try {
+        const raw = fs.readFileSync(mjPath, 'utf8');
+        const config = JSON.parse(raw);
+        const servers = config.mcpServers || config;
+        for (const name of ['feishu-user-plugin', 'feishu']) {
+          if (servers[name]?.env) {
+            Object.assign(servers[name].env, updates);
+            fs.writeFileSync(mjPath, JSON.stringify(config, null, 2) + '\n');
+            console.error('[feishu-user-plugin] UAT persisted to', mjPath);
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // Strategy 3: Fallback to .env in project root (for local dev)
     const envPath = path.join(__dirname, '..', '.env');
     try {
-      let env = fs.readFileSync(envPath, 'utf8');
-      for (const [key, val] of Object.entries({
-        LARK_USER_ACCESS_TOKEN: this._uat,
-        LARK_USER_REFRESH_TOKEN: this._uatRefresh,
-        LARK_UAT_EXPIRES: String(this._uatExpires),
-      })) {
+      let env = '';
+      try { env = fs.readFileSync(envPath, 'utf8'); } catch {}
+      for (const [key, val] of Object.entries(updates)) {
         const regex = new RegExp(`^${key}=.*$`, 'm');
         if (regex.test(env)) env = env.replace(regex, `${key}=${val}`);
         else env += `\n${key}=${val}`;
@@ -109,9 +156,10 @@ class LarkOfficialClient {
     return { items: data.data.items || [], pageToken: data.data.page_token, hasMore: data.data.has_more };
   }
 
-  async readMessagesAsUser(chatId, { pageSize = 20, startTime, endTime, pageToken } = {}) {
+  async readMessagesAsUser(chatId, { pageSize = 20, startTime, endTime, pageToken, sortType = 'ByCreateTimeDesc' } = {}) {
     const params = new URLSearchParams({
       container_id_type: 'chat', container_id: chatId, page_size: String(pageSize),
+      sort_type: sortType,
     });
     if (startTime) params.set('start_time', startTime);
     if (endTime) params.set('end_time', endTime);
@@ -123,98 +171,107 @@ class LarkOfficialClient {
       return res.json();
     });
     if (data.code !== 0) throw new Error(`readMessagesAsUser failed (${data.code}): ${data.msg}`);
-    return {
-      items: (data.data.items || []).map(m => this._formatMessage(m)),
-      hasMore: data.data.has_more,
-      pageToken: data.data.page_token,
-    };
+    const items = (data.data.items || []).map(m => this._formatMessage(m));
+    await this._populateSenderNames(items);
+    return { items, hasMore: data.data.has_more, pageToken: data.data.page_token };
   }
 
   // --- IM ---
 
   async listChats({ pageSize = 20, pageToken } = {}) {
-    const res = await this.client.im.chat.list({ params: { page_size: pageSize, page_token: pageToken } });
-    if (res.code !== 0) throw new Error(`listChats failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.im.chat.list({ params: { page_size: pageSize, page_token: pageToken } }),
+      'listChats'
+    );
     return { items: res.data.items || [], pageToken: res.data.page_token, hasMore: res.data.has_more };
   }
 
-  async readMessages(chatId, { pageSize = 20, startTime, endTime, pageToken } = {}) {
-    const params = { container_id_type: 'chat', container_id: chatId, page_size: pageSize };
+  async readMessages(chatId, { pageSize = 20, startTime, endTime, pageToken, sortType = 'ByCreateTimeDesc' } = {}) {
+    const params = { container_id_type: 'chat', container_id: chatId, page_size: pageSize, sort_type: sortType };
     if (startTime) params.start_time = startTime;
     if (endTime) params.end_time = endTime;
     if (pageToken) params.page_token = pageToken;
-    const res = await this.client.im.message.list({ params });
-    if (res.code !== 0) throw new Error(`readMessages failed (${res.code}): ${res.msg}`);
-    return { items: (res.data.items || []).map(m => this._formatMessage(m)), hasMore: res.data.has_more, pageToken: res.data.page_token };
+    const res = await this._safeSDKCall(() => this.client.im.message.list({ params }), 'readMessages');
+    const items = (res.data.items || []).map(m => this._formatMessage(m));
+    await this._populateSenderNames(items);
+    return { items, hasMore: res.data.has_more, pageToken: res.data.page_token };
   }
 
   async getMessage(messageId) {
-    const res = await this.client.im.message.get({ path: { message_id: messageId } });
-    if (res.code !== 0) throw new Error(`getMessage failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.im.message.get({ path: { message_id: messageId } }),
+      'getMessage'
+    );
     return this._formatMessage(res.data);
   }
 
   async replyMessage(messageId, text, msgType = 'text') {
     const content = msgType === 'text' ? JSON.stringify({ text }) : text;
-    const res = await this.client.im.message.reply({
-      path: { message_id: messageId },
-      data: { content, msg_type: msgType },
-    });
-    if (res.code !== 0) throw new Error(`replyMessage failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.im.message.reply({ path: { message_id: messageId }, data: { content, msg_type: msgType } }),
+      'replyMessage'
+    );
     return { messageId: res.data.message_id };
   }
 
   async forwardMessage(messageId, receiverId, receiveIdType = 'chat_id') {
-    const res = await this.client.im.message.forward({
-      path: { message_id: messageId },
-      data: { receive_id: receiverId },
-      params: { receive_id_type: receiveIdType },
-    });
-    if (res.code !== 0) throw new Error(`forwardMessage failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.im.message.forward({
+        path: { message_id: messageId },
+        data: { receive_id: receiverId },
+        params: { receive_id_type: receiveIdType },
+      }),
+      'forwardMessage'
+    );
     return { messageId: res.data.message_id };
   }
 
   // --- Docs ---
 
   async searchDocs(query, { pageSize = 10, pageToken } = {}) {
-    const res = await this.client.request({
-      method: 'POST',
-      url: '/open-apis/suite/docs-api/search/object',
-      data: { search_key: query, count: pageSize, offset: pageToken ? parseInt(pageToken) : 0, owner_ids: [], chat_ids: [], docs_types: [] },
-    });
-    if (res.code !== 0) throw new Error(`searchDocs failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.request({
+        method: 'POST', url: '/open-apis/suite/docs-api/search/object',
+        data: { search_key: query, count: pageSize, offset: pageToken ? parseInt(pageToken) : 0, owner_ids: [], chat_ids: [], docs_types: [] },
+      }),
+      'searchDocs'
+    );
     return { items: res.data.docs_entities || [], hasMore: res.data.has_more };
   }
 
   async readDoc(documentId) {
-    const res = await this.client.docx.document.rawContent({ path: { document_id: documentId }, params: { lang: 0 } });
-    if (res.code !== 0) throw new Error(`readDoc failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.docx.document.rawContent({ path: { document_id: documentId }, params: { lang: 0 } }),
+      'readDoc'
+    );
     return { content: res.data.content };
   }
 
   async createDoc(title, folderId) {
-    const res = await this.client.docx.document.create({ data: { title, folder_token: folderId || '' } });
-    if (res.code !== 0) throw new Error(`createDoc failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.docx.document.create({ data: { title, folder_token: folderId || '' } }),
+      'createDoc'
+    );
     return { documentId: res.data.document?.document_id };
   }
 
   async getDocBlocks(documentId) {
-    const res = await this.client.docx.documentBlock.list({ path: { document_id: documentId }, params: { page_size: 500 } });
-    if (res.code !== 0) throw new Error(`getDocBlocks failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.docx.documentBlock.list({ path: { document_id: documentId }, params: { page_size: 500 } }),
+      'getDocBlocks'
+    );
     return { items: res.data.items || [] };
   }
 
   // --- Bitable ---
 
   async listBitableTables(appToken) {
-    const res = await this.client.bitable.appTable.list({ path: { app_token: appToken } });
-    if (res.code !== 0) throw new Error(`listTables failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(() => this.client.bitable.appTable.list({ path: { app_token: appToken } }), 'listTables');
     return { items: res.data.items || [] };
   }
 
   async listBitableFields(appToken, tableId) {
-    const res = await this.client.bitable.appTableField.list({ path: { app_token: appToken, table_id: tableId } });
-    if (res.code !== 0) throw new Error(`listFields failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(() => this.client.bitable.appTableField.list({ path: { app_token: appToken, table_id: tableId } }), 'listFields');
     return { items: res.data.items || [] };
   }
 
@@ -224,55 +281,46 @@ class LarkOfficialClient {
     if (sort) data.sort = sort;
     if (pageSize) data.page_size = pageSize;
     if (pageToken) data.page_token = pageToken;
-    const res = await this.client.bitable.appTableRecord.search({
-      path: { app_token: appToken, table_id: tableId },
-      data,
-    });
-    if (res.code !== 0) throw new Error(`searchRecords failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.bitable.appTableRecord.search({ path: { app_token: appToken, table_id: tableId }, data }),
+      'searchRecords'
+    );
     return { items: res.data.items || [], total: res.data.total, hasMore: res.data.has_more };
   }
 
   async createBitableRecord(appToken, tableId, fields) {
-    const res = await this.client.bitable.appTableRecord.create({
-      path: { app_token: appToken, table_id: tableId },
-      data: { fields },
-    });
-    if (res.code !== 0) throw new Error(`createRecord failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.bitable.appTableRecord.create({ path: { app_token: appToken, table_id: tableId }, data: { fields } }),
+      'createRecord'
+    );
     return { recordId: res.data.record?.record_id };
   }
 
   async updateBitableRecord(appToken, tableId, recordId, fields) {
-    const res = await this.client.bitable.appTableRecord.update({
-      path: { app_token: appToken, table_id: tableId, record_id: recordId },
-      data: { fields },
-    });
-    if (res.code !== 0) throw new Error(`updateRecord failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.bitable.appTableRecord.update({ path: { app_token: appToken, table_id: tableId, record_id: recordId }, data: { fields } }),
+      'updateRecord'
+    );
     return { recordId: res.data.record?.record_id };
   }
 
   // --- Wiki ---
 
   async listWikiSpaces() {
-    const res = await this.client.wiki.space.list({ params: { page_size: 50 } });
-    if (res.code !== 0) throw new Error(`listSpaces failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(() => this.client.wiki.space.list({ params: { page_size: 50 } }), 'listSpaces');
     return { items: res.data.items || [] };
   }
 
   async searchWiki(query) {
-    const res = await this.client.request({
-      method: 'POST',
-      url: '/open-apis/suite/docs-api/search/object',
-      data: { search_key: query, count: 20, offset: 0, owner_ids: [], chat_ids: [], docs_types: ['wiki'] },
-    });
-    if (res.code !== 0) throw new Error(`searchWiki failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.request({ method: 'POST', url: '/open-apis/suite/docs-api/search/object', data: { search_key: query, count: 20, offset: 0, owner_ids: [], chat_ids: [], docs_types: ['wiki'] } }),
+      'searchWiki'
+    );
     return { items: res.data.docs_entities || [] };
   }
 
   async getWikiNode(spaceId, nodeToken) {
-    const res = await this.client.wiki.space.getNode({
-      params: { token: nodeToken },
-    });
-    if (res.code !== 0) throw new Error(`getNode failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(() => this.client.wiki.space.getNode({ params: { token: nodeToken } }), 'getNode');
     return res.data.node;
   }
 
@@ -280,11 +328,10 @@ class LarkOfficialClient {
     const params = { page_size: 50 };
     if (parentNodeToken) params.parent_node_token = parentNodeToken;
     if (pageToken) params.page_token = pageToken;
-    const res = await this.client.wiki.spaceNode.list({
-      path: { space_id: spaceId },
-      params,
-    });
-    if (res.code !== 0) throw new Error(`listNodes failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.wiki.spaceNode.list({ path: { space_id: spaceId }, params }),
+      'listNodes'
+    );
     return { items: res.data.items || [], hasMore: res.data.has_more };
   }
 
@@ -293,16 +340,15 @@ class LarkOfficialClient {
   async listFiles(folderToken, { pageSize = 50, pageToken } = {}) {
     const params = { page_size: pageSize, folder_token: folderToken || '' };
     if (pageToken) params.page_token = pageToken;
-    const res = await this.client.drive.file.list({ params });
-    if (res.code !== 0) throw new Error(`listFiles failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(() => this.client.drive.file.list({ params }), 'listFiles');
     return { items: res.data.files || [], hasMore: res.data.has_more };
   }
 
   async createFolder(name, parentToken) {
-    const res = await this.client.drive.file.createFolder({
-      data: { name, folder_token: parentToken || '' },
-    });
-    if (res.code !== 0) throw new Error(`createFolder failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.drive.file.createFolder({ data: { name, folder_token: parentToken || '' } }),
+      'createFolder'
+    );
     return { token: res.data.token };
   }
 
@@ -312,11 +358,10 @@ class LarkOfficialClient {
     const data = {};
     if (emails) data.emails = Array.isArray(emails) ? emails : [emails];
     if (mobiles) data.mobiles = Array.isArray(mobiles) ? mobiles : [mobiles];
-    const res = await this.client.contact.user.batchGetId({
-      data,
-      params: { user_id_type: 'open_id' },
-    });
-    if (res.code !== 0) throw new Error(`findUser failed (${res.code}): ${res.msg}`);
+    const res = await this._safeSDKCall(
+      () => this.client.contact.user.batchGetId({ data, params: { user_id_type: 'open_id' } }),
+      'findUser'
+    );
     return { userList: res.data.user_list || [] };
   }
 
@@ -327,13 +372,81 @@ class LarkOfficialClient {
     let pageToken;
     let hasMore = true;
     while (hasMore) {
-      const res = await this.client.im.chat.list({ params: { page_size: 100, page_token: pageToken } });
-      if (res.code !== 0) throw new Error(`listAllChats failed (${res.code}): ${res.msg}`);
+      const res = await this._safeSDKCall(
+        () => this.client.im.chat.list({ params: { page_size: 100, page_token: pageToken } }),
+        'listAllChats'
+      );
       allChats.push(...(res.data.items || []));
       pageToken = res.data.page_token;
       hasMore = res.data.has_more && !!pageToken;
     }
     return allChats;
+  }
+
+  // --- Safe SDK Call (extracts real Feishu error from AxiosError) ---
+
+  async _safeSDKCall(fn, label = 'API') {
+    try {
+      const res = await fn();
+      if (res.code !== 0) throw new Error(`${label} failed (${res.code}): ${res.msg}`);
+      return res;
+    } catch (err) {
+      // Lark SDK uses axios; extract actual Feishu error from response body
+      if (err.response?.data) {
+        const d = err.response.data;
+        const code = d.code ?? d.error ?? 'unknown';
+        const msg = d.msg ?? d.error_description ?? d.message ?? JSON.stringify(d);
+        throw new Error(`${label} failed (HTTP ${err.response.status}, code=${code}): ${msg}`);
+      }
+      throw err;
+    }
+  }
+
+  // --- Chat Search (keyword-based, works even if bot isn't in the group's list) ---
+
+  async chatSearch(query) {
+    const res = await this._safeSDKCall(
+      () => this.client.im.chat.search({ params: { query, page_size: 20 } }),
+      'chatSearch'
+    );
+    return res.data.items || [];
+  }
+
+  // --- User Name Resolution ---
+
+  async getUserById(userId, userIdType = 'open_id') {
+    if (this._userNameCache.has(userId)) return this._userNameCache.get(userId);
+    try {
+      const res = await this.client.contact.user.get({
+        path: { user_id: userId },
+        params: { user_id_type: userIdType },
+      });
+      if (res.code === 0 && res.data?.user?.name) {
+        this._userNameCache.set(userId, res.data.user.name);
+        return res.data.user.name;
+      }
+    } catch {}
+    return null;
+  }
+
+  async _populateSenderNames(items) {
+    // Collect unique sender IDs that aren't cached
+    const unknownIds = new Set();
+    for (const item of items) {
+      if (item.senderId && !this._userNameCache.has(item.senderId)) {
+        unknownIds.add(item.senderId);
+      }
+    }
+    // Batch resolve (sequential, with caching to avoid duplicate calls)
+    for (const id of unknownIds) {
+      await this.getUserById(id);
+    }
+    // Populate senderName field
+    for (const item of items) {
+      if (item.senderId) {
+        item.senderName = this._userNameCache.get(item.senderId) || null;
+      }
+    }
   }
 
   // --- Helpers ---

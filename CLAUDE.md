@@ -22,15 +22,15 @@ All-in-one Feishu plugin for Claude Code with three auth layers:
 - `search_contacts` — Search users/groups by name
 - `create_p2p_chat` — Create/get P2P chat
 - `get_chat_info` — Group details (name, members, owner)
-- `get_user_info` — User display name lookup
+- `get_user_info` — User display name lookup (with official API fallback for cross-tenant users)
 - `get_login_status` — Check cookie, app, and UAT status
 
 ### User OAuth UAT Tools (P2P chat reading)
-- `read_p2p_messages` — Read P2P (direct message) chat history. chat_id accepts both numeric IDs (from create_p2p_chat) and oc_xxx format.
+- `read_p2p_messages` — Read P2P (direct message) chat history. chat_id accepts both numeric IDs (from create_p2p_chat) and oc_xxx format. Returns newest messages first by default.
 - `list_user_chats` — List group chats the user is in. Note: API only returns groups, not P2P. For P2P, use: `search_contacts` → `create_p2p_chat` → `read_p2p_messages`.
 
 ### Official API Tools (app credentials)
-- `list_chats` / `read_messages` — Chat history (read_messages accepts chat name, auto-resolves to oc_ ID)
+- `list_chats` / `read_messages` — Chat history (read_messages accepts chat name, auto-resolves to oc_ ID via bot's group list + im.chat.search). Returns newest messages first by default. Messages include sender names.
 - `reply_message` / `forward_message` — Message operations (as bot)
 - `search_docs` / `read_doc` / `create_doc` — Document operations
 - `list_bitable_tables` / `list_bitable_fields` / `search_bitable_records` — Table queries
@@ -42,7 +42,7 @@ All-in-one Feishu plugin for Claude Code with three auth layers:
 ## Usage Patterns
 - Send text as yourself → `send_to_user` or `send_to_group`
 - Send rich content → `send_post_as_user` (formatted text), `send_image_as_user` (images)
-- Read group chat history → `read_messages` with chat name or oc_ ID
+- Read group chat history → `read_messages` with chat name or oc_ ID (newest first by default)
 - Read P2P chat history → `search_contacts` → `create_p2p_chat` → `read_p2p_messages`
 - Reply as user in thread → `send_as_user` with root_id
 - Reply as bot → `reply_message` (official API)
@@ -51,7 +51,7 @@ All-in-one Feishu plugin for Claude Code with three auth layers:
 ## Auth & Session
 - **LARK_COOKIE**: Required for user identity tools. Session auto-refreshed every 4h via heartbeat.
 - **LARK_APP_ID + LARK_APP_SECRET**: Required for official API tools.
-- **LARK_USER_ACCESS_TOKEN + LARK_USER_REFRESH_TOKEN**: Required for P2P reading. Auto-refreshed via refresh_token.
+- **LARK_USER_ACCESS_TOKEN + LARK_USER_REFRESH_TOKEN**: Required for P2P reading. Auto-refreshed via refresh_token. Token is auto-persisted to MCP config on refresh.
 - Cookie expiry: sl_session has 12h max-age, auto-refreshed by heartbeat.
 
 ## Required Environment Variables (ALL are required for full functionality)
@@ -68,7 +68,7 @@ All 5 must be configured. Without UAT, `read_p2p_messages` and `list_user_chats`
 
 ## Installation — MCP Server Config Format
 
-### CRITICAL: Exact config format for `~/.claude.json` or `.mcp.json`
+### Config format for `~/.claude.json` or `.mcp.json`
 
 ```json
 {
@@ -86,7 +86,15 @@ All 5 must be configured. Without UAT, `read_p2p_messages` and `list_user_chats`
 }
 ```
 
-**DO NOT add `"type": "stdio"`** — Claude Code's `.mcp.json` / `~/.claude.json` does NOT use this field. Adding it causes the MCP server to fail to load. Other MCP clients (VS Code, Cursor) may use `"type"`, but Claude Code does not. Do not copy from other MCP server configs.
+> `"type": "stdio"` is optional for stdio servers — Claude Code accepts it but does not require it.
+
+### Quick setup via CLI
+
+```bash
+npx feishu-user-plugin setup    # Interactive setup wizard
+npx feishu-user-plugin oauth    # Get OAuth UAT tokens
+npx feishu-user-plugin status   # Check auth status
+```
 
 ### If there's an existing `.env` file
 
@@ -160,12 +168,13 @@ Use the EXACT format from the "Installation" section above. Include ALL env vars
 
 **Step 6: Run OAuth for UAT (if not already configured)**
 
-After writing Cookie + App credentials to config, check if LARK_USER_ACCESS_TOKEN is already available (from `.env` or previous setup). If not, the user needs to run OAuth:
+After writing Cookie + App credentials to config, check if LARK_USER_ACCESS_TOKEN is already available (from `.env` or previous setup). If not:
 
-Option A (if `oauth-auto.js` is available in the repo): `node src/oauth-auto.js` — uses Playwright + Cookie to auto-authorize
-Option B (manual): `node src/oauth.js` — opens browser for OAuth consent
+```bash
+npx feishu-user-plugin oauth
+```
 
-After OAuth completes, read the UAT from `.env` and add it to the MCP config.
+This opens a browser for OAuth consent. After completion, it saves tokens to `.env`. Copy them to your MCP config's `env` section.
 
 **Step 7: Close browser and prompt restart**
 
@@ -178,7 +187,7 @@ Tell user to restart Claude Code. Only ONE restart should be needed.
 ## Troubleshooting Guide
 
 ### If MCP tools are not available
-1. Check `.mcp.json` / `~/.claude.json` config format — must NOT have `"type": "stdio"`
+1. Check `.mcp.json` / `~/.claude.json` config format
 2. Restart Claude Code after config changes
 3. After restart, tools may take a few seconds to register — if first call fails with "No such tool", wait and retry once
 
@@ -192,16 +201,22 @@ Tell user to restart Claude Code. Only ONE restart should be needed.
 - **ALWAYS clear cookies first** with `context.clearCookies()` before navigating to feishu.cn
 - After login, verify the account by checking the URL domain (each Feishu tenant has a unique subdomain like `xxx.feishu.cn`)
 
+### If read_messages returns an error
+- Error messages now include the actual Feishu error code and description
+- Common causes: bot not in the group, missing `im:message:readonly` scope, invalid chat_id
+- Chat name resolution uses both bot's group list AND `im.chat.search` API as fallback
+- If bot can't read a group, try `read_p2p_messages` with UAT instead
+
 ### If UAT refresh fails with "invalid_grant" (error 28003/20003/20005)
 - The refresh token has expired or been revoked — auto-refresh cannot recover this
-- **Fix**: Re-run OAuth authorization: `node src/oauth.js` (requires LARK_APP_ID + LARK_APP_SECRET in `.env`)
-- After OAuth completes, copy the new `LARK_USER_ACCESS_TOKEN` and `LARK_USER_REFRESH_TOKEN` from `.env` to your MCP config's `env` section
+- **Fix**: Re-run OAuth: `npx feishu-user-plugin oauth`
+- After OAuth completes, copy tokens from `.env` to your MCP config's `env` section
 - Then restart Claude Code
 
-### If `node src/oauth.js` fails with "Missing LARK_APP_ID"
-- `oauth.js` reads credentials from the project's `.env` file, NOT from MCP config
-- Create/update `.env` in the project root with `LARK_APP_ID=cli_xxx` and `LARK_APP_SECRET=xxx`
-- Then re-run `node src/oauth.js`
+### If OAuth fails with "Missing LARK_APP_ID"
+- `oauth.js` reads credentials from the project's `.env` file
+- Run `npx feishu-user-plugin setup` first to write credentials, or create `.env` manually
+- Then re-run `npx feishu-user-plugin oauth`
 
 ### If OAuth fails with error 20029 (redirect_uri invalid)
 - The Feishu app must have `http://127.0.0.1:9997/callback` registered as a redirect URI
@@ -211,9 +226,10 @@ Tell user to restart Claude Code. Only ONE restart should be needed.
 - **Correct P2P flow**: `search_contacts` → `create_p2p_chat` → `read_p2p_messages`
 
 ### If UAT is missing after installation
-- Check the project `.env` file for `LARK_USER_ACCESS_TOKEN` and `LARK_USER_REFRESH_TOKEN`
-- These must be added to the MCP config's `env` section — the server reads from `process.env`, not from `.env` when running via npx
+- Run `npx feishu-user-plugin oauth` to obtain tokens
+- UAT auto-refresh now persists to `~/.claude.json` MCP config (no manual copy needed for npx users)
 
 ## Known Limitations
 - Image/file upload must go through Official API or feishu-file-bridge first to obtain keys
 - CARD message type (type=14) not yet implemented — complex JSON schema
+- External tenant users may not be resolvable via `get_user_info` (contact API scope limitation)

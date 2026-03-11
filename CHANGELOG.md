@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-03-11
+
+### Fixed
+- **read_messages 400 error hidden**: Now shows actual Feishu error code and description instead of just "Request failed with status code 400"
+- **Messages returned oldest first**: Default sort is now `ByCreateTimeDesc` (newest messages first) for both `read_messages` and `read_p2p_messages`
+- **Chat name resolution**: Added `im.v1.chat.search` API as fallback when bot's group list doesn't contain the target chat
+- **get_user_info fails for external users**: Added official contact API fallback (`contact.user.get`) for cross-tenant user lookup
+- **Messages lack sender names**: `read_messages` and `read_p2p_messages` now auto-resolve sender IDs to display names
+- **UAT persistence writes to npx temp dir**: Now persists refreshed tokens to `~/.claude.json` MCP config instead
+- **oauth-auto.js missing offline_access scope**: Added `offline_access` to SCOPES (was missing, causing no refresh_token)
+- **README "8 slash commands"**: Corrected to "9 slash commands" (was missing /drive)
+- **CLAUDE.md false "type: stdio" warning**: Removed — `"type": "stdio"` is standard and harmless in Claude Code
+
+### Added
+- `sort_type` parameter for `read_messages` and `read_p2p_messages` (`ByCreateTimeDesc` / `ByCreateTimeAsc`)
+- `senderName` field in message results (auto-resolved from sender ID)
+- CLI subcommands: `npx feishu-user-plugin setup` (wizard), `oauth`, `status`
+- `src/cli.js` — CLI dispatcher for subcommands
+- `src/setup.js` — Interactive setup wizard (writes MCP config, validates credentials)
+- `chatSearch()` method in official client (uses `im.v1.chat.search`)
+- `getUserById()` method with caching for user name resolution
+- `_safeSDKCall()` wrapper that extracts real Feishu errors from Lark SDK AxiosErrors
+- `_populateSenderNames()` for batch sender name resolution in message lists
+
+### Changed
+- `package.json` bin entry points to `src/cli.js` (supports subcommands, default still starts MCP server)
+- team-skills README rewritten for pure npm flow (no clone needed)
+- CLAUDE.md OAuth instructions updated to use `npx feishu-user-plugin oauth`
+- Error messages across all 33 tools now include actual Feishu error codes
+
 ## [1.0.2] - 2026-03-10
 
 ### Fixed

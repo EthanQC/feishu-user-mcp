@@ -48,8 +48,24 @@ class ChatIdMapper {
 
   async resolveToOcId(chatIdOrName, official) {
     if (chatIdOrName.startsWith('oc_')) return chatIdOrName;
-    // Try as chat name
-    return this.findByName(chatIdOrName, official);
+    // Strategy 1: Search in bot's group list cache
+    const cached = await this.findByName(chatIdOrName, official);
+    if (cached) return cached;
+    // Strategy 2: Use im.v1.chat.search API (finds groups even if not in cache)
+    try {
+      const results = await official.chatSearch(chatIdOrName);
+      for (const chat of results) {
+        this.nameCache.set(chat.chat_id, chat.name || '');
+        if (chat.name === chatIdOrName) return chat.chat_id;
+      }
+      // Partial match on search results
+      for (const chat of results) {
+        if (chat.name && chat.name.includes(chatIdOrName)) return chat.chat_id;
+      }
+    } catch (e) {
+      console.error('[feishu-user-plugin] chatSearch fallback failed:', e.message);
+    }
+    return null;
   }
 }
 
@@ -251,7 +267,7 @@ const TOOLS = [
   // ========== IM — Official API (User Identity via UAT) ==========
   {
     name: 'read_p2p_messages',
-    description: '[User UAT] Read P2P (direct message) chat history using user_access_token. Works for chats the bot cannot access. Requires OAuth setup: run "node src/oauth.js" first.',
+    description: '[User UAT] Read P2P (direct message) chat history using user_access_token. Works for chats the bot cannot access. Returns newest messages first by default. Requires OAuth setup.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -259,6 +275,7 @@ const TOOLS = [
         page_size: { type: 'number', description: 'Messages to fetch (default 20, max 50)' },
         start_time: { type: 'string', description: 'Start timestamp in seconds (optional)' },
         end_time: { type: 'string', description: 'End timestamp in seconds (optional)' },
+        sort_type: { type: 'string', enum: ['ByCreateTimeDesc', 'ByCreateTimeAsc'], description: 'Sort order (default: ByCreateTimeDesc = newest first)' },
       },
       required: ['chat_id'],
     },
@@ -289,7 +306,7 @@ const TOOLS = [
   },
   {
     name: 'read_messages',
-    description: '[Official API] Read message history. Accepts oc_xxx ID or chat name (auto-resolved).',
+    description: '[Official API] Read message history. Accepts oc_xxx ID or chat name (auto-searched via bot group list + im.chat.search). Returns newest messages first by default, with sender names resolved.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -297,6 +314,7 @@ const TOOLS = [
         page_size: { type: 'number', description: 'Messages to fetch (default 20, max 50)' },
         start_time: { type: 'string', description: 'Start timestamp in seconds (optional)' },
         end_time: { type: 'string', description: 'End timestamp in seconds (optional)' },
+        sort_type: { type: 'string', enum: ['ByCreateTimeDesc', 'ByCreateTimeAsc'], description: 'Sort order (default: ByCreateTimeDesc = newest first)' },
       },
       required: ['chat_id'],
     },
@@ -490,7 +508,7 @@ const TOOLS = [
 // --- Server ---
 
 const server = new Server(
-  { name: 'feishu-user-plugin', version: '1.0.2' },
+  { name: 'feishu-user-plugin', version: '1.1.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -583,15 +601,24 @@ async function handleTool(name, args) {
       return info ? json(info) : text(`No info for chat ${args.chat_id}`);
     }
     case 'get_user_info': {
-      const c = await getUserClient();
-      // Try name cache first; if miss, do a search to populate cache
-      let n = await c.getUserName(args.user_id);
-      if (!n && args.user_id) {
-        // Try searching to populate the cache
-        await c.search(args.user_id);
+      let n = null;
+      // Strategy 1: User identity client cache
+      try {
+        const c = await getUserClient();
         n = await c.getUserName(args.user_id);
+        if (!n && args.user_id) {
+          await c.search(args.user_id);
+          n = await c.getUserName(args.user_id);
+        }
+      } catch {}
+      // Strategy 2: Official API contact lookup (works for same-tenant users)
+      if (!n) {
+        try {
+          const official = getOfficialClient();
+          n = await official.getUserById(args.user_id, 'open_id');
+        } catch {}
       }
-      return text(n ? `User ${args.user_id}: ${n}` : `Could not resolve user ${args.user_id}. Try search_contacts with the user's name instead.`);
+      return text(n ? `User ${args.user_id}: ${n}` : `Could not resolve user ${args.user_id}. This user may be from an external tenant. Try search_contacts with the user's display name instead.`);
     }
     case 'get_login_status': {
       const parts = [];
@@ -614,6 +641,7 @@ async function handleTool(name, args) {
       const official = getOfficialClient();
       return json(await official.readMessagesAsUser(args.chat_id, {
         pageSize: args.page_size, startTime: args.start_time, endTime: args.end_time,
+        sortType: args.sort_type,
       }));
     }
     case 'list_user_chats':
@@ -627,10 +655,11 @@ async function handleTool(name, args) {
       const official = getOfficialClient();
       const resolvedChatId = await chatIdMapper.resolveToOcId(args.chat_id, official);
       if (!resolvedChatId) {
-        return text(`Cannot resolve "${args.chat_id}" to oc_ ID. Use list_chats to find the correct ID, or provide chat name.`);
+        return text(`Cannot resolve "${args.chat_id}" to oc_ ID. Searched bot's group list and used im.chat.search API — no match found.\nTry: list_chats to see all bot groups, or provide the oc_xxx ID directly.\nIf the bot is not in this group, use read_p2p_messages with UAT instead.`);
       }
       return json(await official.readMessages(resolvedChatId, {
         pageSize: args.page_size, startTime: args.start_time, endTime: args.end_time,
+        sortType: args.sort_type,
       }));
     }
     case 'reply_message':
@@ -696,7 +725,7 @@ async function main() {
   const hasCookie = !!process.env.LARK_COOKIE;
   const hasApp = !!(process.env.LARK_APP_ID && process.env.LARK_APP_SECRET);
   const hasUAT = !!process.env.LARK_USER_ACCESS_TOKEN;
-  console.error(`[feishu-user-plugin] MCP Server v1.0.2 — ${TOOLS.length} tools`);
+  console.error(`[feishu-user-plugin] MCP Server v1.1.0 — ${TOOLS.length} tools`);
   console.error(`[feishu-user-plugin] Auth: Cookie=${hasCookie ? 'YES' : 'NO'} App=${hasApp ? 'YES' : 'NO'} UAT=${hasUAT ? 'YES' : 'NO'}`);
   if (!hasCookie) console.error('[feishu-user-plugin] WARNING: LARK_COOKIE not set — user identity tools (send_to_user, etc.) will fail');
   if (!hasApp) console.error('[feishu-user-plugin] WARNING: LARK_APP_ID/SECRET not set — official API tools (read_messages, docs, etc.) will fail');

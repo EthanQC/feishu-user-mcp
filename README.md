@@ -16,7 +16,7 @@ The only MCP server that lets you send messages as your **personal identity** (n
 - **Read everything** -- Group chats via bot API, P2P (direct messages) via OAuth UAT.
 - **Full Feishu suite** -- Docs, Bitable (spreadsheets), Wiki, Drive, Contacts -- all in one plugin.
 - **3 auth layers** -- Cookie-based user identity, app credentials (Official API), and OAuth UAT (P2P reading). All three are needed for full functionality.
-- **8 slash commands** for Claude Code -- `/send`, `/reply`, `/search`, `/digest`, `/doc`, `/table`, `/wiki`, `/status`
+- **9 slash commands** for Claude Code -- `/send`, `/reply`, `/search`, `/digest`, `/doc`, `/table`, `/wiki`, `/drive`, `/status`
 - **Auto session management** -- Cookie heartbeat every 4h, UAT auto-refresh with token rotation.
 - **Chat name resolution** -- Pass a group name instead of `oc_xxx` ID; it resolves automatically.
 

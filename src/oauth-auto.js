@@ -13,7 +13,7 @@ const APP_SECRET = process.env.LARK_APP_SECRET;
 const COOKIE_STR = process.env.LARK_COOKIE;
 const PORT = 9997;
 const REDIRECT_URI = `http://127.0.0.1:${PORT}/callback`;
-const SCOPES = 'im:message im:message:readonly im:chat:readonly contact:user.base:readonly';
+const SCOPES = 'offline_access im:message im:message:readonly im:chat:readonly contact:user.base:readonly';
 
 function parseCookies(cookieStr) {
   return cookieStr.split(';').map(c => {
